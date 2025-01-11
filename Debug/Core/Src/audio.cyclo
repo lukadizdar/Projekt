@@ -1,0 +1,2 @@
+../Core/Src/audio.c:9:6:init_AudioReset	1
+../Core/Src/audio.c:12:6:configAudio	1
