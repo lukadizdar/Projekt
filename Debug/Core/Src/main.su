@@ -1,7 +1,7 @@
 ../Core/Src/main.c:76:5:main	8	static
-../Core/Src/main.c:131:6:SystemClock_Config	88	static
-../Core/Src/main.c:173:6:generate_fake_signal	24	static
+../Core/Src/main.c:132:6:SystemClock_Config	88	static
+../Core/Src/main.c:174:6:generate_fake_signal	32	static
 ../Core/Src/main.c:181:6:echo_effect	32	static
 ../Core/Src/main.c:192:6:HAL_TIM_PeriodElapsedCallback	16	static
-../Core/Src/main.c:204:6:dma_callback_simulation	16	static
-../Core/Src/main.c:219:6:Error_Handler	4	static,ignoring_inline_asm
+../Core/Src/main.c:203:6:dma_simulation	16	static
+../Core/Src/main.c:218:6:Error_Handler	4	static,ignoring_inline_asm

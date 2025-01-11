@@ -17,8 +17,6 @@
   */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
-#include <stdlib.h>
-#include <math.h>
 #include "main.h"
 #include "i2c.h"
 #include "i2s.h"
@@ -29,7 +27,9 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "audio.h"
+#include <stdlib.h>
+#include <math.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -53,7 +53,7 @@
 
 /* USER CODE BEGIN PV */
 uint16_t fake_signal[BUFFER_SIZE]; // Buffer za dummy signal
-uint16_t real_signal[BUFFER_SIZE];
+uint16_t real_signal;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -103,9 +103,11 @@ int main(void)
   MX_SPI1_Init();
   MX_USB_HOST_Init();
   MX_TIM2_Init();
+
   /* USER CODE BEGIN 2 */
   HAL_TIM_Base_Start_IT(&htim2);
   configAudio();
+
   //uint16_t signal;
 
   /* USER CODE END 2 */
@@ -116,7 +118,6 @@ int main(void)
   {
     /* USER CODE END WHILE */
     MX_USB_HOST_Process();
-
     /* USER CODE BEGIN 3 */
     //signal = rand();
     //HAL_I2S_Transmit(&hi2s3, &fake_signal, 1, 10);
@@ -170,14 +171,13 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
-void generate_fake_signal() {
-    for (int i = 0; i < BUFFER_SIZE; i++) {
+void generate_fake_signal(uint16_t *buffer, int size) {
+    for (int i = 0; i < size; i++) {
         float sine_wave = sin(2 * M_PI * SIGNAL_FREQ * i / SAMPLE_FREQ);
-        float noise = ((float)rand() / RAND_MAX) * 0.1 - 0.05; // Šum
-        fake_signal[i] = (uint16_t)((sine_wave + noise) * 32767 + 32768);
+        float noise = ((float)rand() / RAND_MAX) * 0.1 - 0.05; // Šum [-0.05, 0.05]
+        buffer[i] = (uint16_t)((sine_wave + noise) * 32767 + 32768); // Prebaci u unsigned 16-bitni format
     }
 }
-
 void echo_effect(uint16_t *buffer, int size, float echo_strength, int delay) {
     static uint16_t echo_buffer[BUFFER_SIZE * 2] = {0}; // Povećan buffer za "delay"
     for (int i = 0; i < size; i++) {
@@ -192,18 +192,17 @@ void echo_effect(uint16_t *buffer, int size, float echo_strength, int delay) {
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
     if (htim->Instance == TIM2) {
         // Generiraj dummy signal i simuliraj DMA prijenos - sada je generate fake signal napunio
-        generate_fake_signal(fake_signal, BUFFER_SIZE);
         HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_15);
-        dma_callback_simulation(fake_signal, BUFFER_SIZE);
+        generate_fake_signal(fake_signal, BUFFER_SIZE);
+        dma_simulation(fake_signal, BUFFER_SIZE);
         //echo_effect(fake_signal, BUFFER_SIZE, 20, 3);
-
         // Simuliraj DMA callback
     }
 }
 
-void dma_callback_simulation(uint16_t *buffer, uint16_t size) {
+void dma_simulation(uint16_t *buffer, uint16_t size) {
     // Obradi signal (npr. dodaj efekte ili manipuliraj signalom)
-    echo_effect(buffer, size, 0.5, 3); // Dodaj echo efekt
+    echo_effect(buffer, size, 0.5, 10); // Dodaj echo efekt
 
     // Simuliraj slanje signala (DAC, I2S, ili ispis na UART za testiranje)
     HAL_I2S_Transmit(&hi2s3, buffer, size, HAL_MAX_DELAY); // Slanje signala
