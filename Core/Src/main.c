@@ -61,7 +61,8 @@ uint32_t time_diff = 0;
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
-void MX_USB_HOST_Process(void);
+
+//void MX_USB_HOST_Process(void);
 
 /* USER CODE BEGIN PFP */
 
@@ -89,7 +90,7 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-
+  last_systick = HAL_GetTick();
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -104,12 +105,14 @@ int main(void)
   MX_I2C1_Init();
   MX_I2S3_Init();
   MX_SPI1_Init();
-  MX_USB_HOST_Init();
+//  MX_USB_HOST_Init();
 //  MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
 //  HAL_TIM_Base_Start_IT(&htim2);
   configAudio();
-
+  last_systick = HAL_GetTick(); //traje 5 milisekundi
+  generate_fake_signal(&fake_signal, BUFFER_SIZE); //traje 1 milisekundu
+  last_systick = HAL_GetTick();
   //uint16_t signal;
 
   /* USER CODE END 2 */
@@ -119,16 +122,16 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
-    MX_USB_HOST_Process();
-    uint32_t time_start = HAL_GetTick();
+//    MX_USB_HOST_Process();
+    last_systick= HAL_GetTick();
     /* USER CODE BEGIN 3 */
-    generate_fake_signal(&fake_signal, BUFFER_SIZE);
 
-    echo_effect(&fake_signal, BUFFER_SIZE, 0.5, 10);
+
+    echo_effect(&fake_signal, BUFFER_SIZE, 0.5, 10); //treba 1 ms za apply echo
     last_systick = HAL_GetTick();
-    time_diff = last_systick - time_start; //vrijeme potrošeno na generiranje fake sig
     HAL_I2S_Transmit(&hi2s3, &fake_signal, 1, 10);
     HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_SET);
+    last_systick = HAL_GetTick();
   }
   /* USER CODE END 3 */
 }
