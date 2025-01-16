@@ -3,6 +3,7 @@ CAD.formats=
 CAD.pinconfig=
 CAD.provider=
 File.Version=6
+GPIO.groupedBy=Group By Peripherals
 I2S3.AudioFreq=I2S_AUDIOFREQ_44K
 I2S3.AudioFreq-Half_Duplex_Master=I2S_AUDIOFREQ_96K
 I2S3.ErrorAudioFreq=0.26 %

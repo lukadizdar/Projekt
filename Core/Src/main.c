@@ -61,8 +61,7 @@ uint32_t time_diff = 0;
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
-
-//void MX_USB_HOST_Process(void);
+void MX_USB_HOST_Process(void);
 
 /* USER CODE BEGIN PFP */
 
@@ -105,14 +104,16 @@ int main(void)
   MX_I2C1_Init();
   MX_I2S3_Init();
   MX_SPI1_Init();
-//  MX_USB_HOST_Init();
-//  MX_TIM2_Init();
+  MX_USB_HOST_Init();
+  MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
-//  HAL_TIM_Base_Start_IT(&htim2);
+  HAL_TIM_Base_Start_IT(&htim2);
   configAudio();
   last_systick = HAL_GetTick(); //traje 5 milisekundi
-  generate_fake_signal(&fake_signal, BUFFER_SIZE); //traje 1 milisekundu
-  last_systick = HAL_GetTick();
+//  generate_fake_signal(&fake_signal, BUFFER_SIZE); //traje 1 milisekundu
+//  last_systick = HAL_GetTick();
+
+  HAL_I2S_Transmit_IT(&hi2s3, fake_signal, BUFFER_SIZE);
   //uint16_t signal;
 
   /* USER CODE END 2 */
@@ -122,16 +123,11 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
-//    MX_USB_HOST_Process();
-    last_systick= HAL_GetTick();
+    MX_USB_HOST_Process();
+
     /* USER CODE BEGIN 3 */
 
 
-    echo_effect(&fake_signal, BUFFER_SIZE, 0.5, 10); //treba 1 ms za apply echo
-    last_systick = HAL_GetTick();
-    HAL_I2S_Transmit(&hi2s3, &fake_signal, 1, 10);
-    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_SET);
-    last_systick = HAL_GetTick();
   }
   /* USER CODE END 3 */
 }
@@ -201,28 +197,35 @@ void echo_effect(uint16_t *buffer, int size, float echo_strength, int delay) {
     }
 }
 
-//void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
-//    if (htim->Instance == TIM2) {
-//        // Generiraj dummy signal i simuliraj DMA prijenos - sada je generate fake signal napunio
-//        uint32_t current_systick = HAL_GetTick();
-//        time_diff = current_systick - last_systick;
-//        last_systick = current_systick;
-//
-//        HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_15);
-//        dma_simulation(fake_signal, BUFFER_SIZE);
-//
-//    }
-//}
-//
-//void dma_simulation(uint16_t *buffer, uint16_t size) {
-//    //simuliramo punjenje buffera. interrupt traje točno 1 ms
-//    generate_fake_signal(fake_signal, BUFFER_SIZE);
-//	//sada je naš fake buffer pun fake signala pomoću fake funkcije
-//	echo_effect(buffer, size, 0.5, 10);
-//	//dodajemo efekte na fake signal
-//    HAL_I2S_Transmit(&hi2s3, buffer, size, HAL_MAX_DELAY);
-//
-//}
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
+    if (htim->Instance == TIM2) {
+        // Generiraj dummy signal i simuliraj DMA prijenos - sada je generate fake signal napunio
+
+    	if (i2s_ready == 1) {
+    		i2s_ready = 0;
+        	last_systick = HAL_GetTick();
+            HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_15);
+            dma_simulation(fake_signal, BUFFER_SIZE);
+    	}
+
+
+    }
+}
+
+void dma_simulation(uint16_t *buffer, uint16_t size) {
+    //simuliramo punjenje buffera. interrupt traje točno 1 ms
+    generate_fake_signal(fake_signal, BUFFER_SIZE);
+	//sada je naš fake buffer pun fake signala pomoću fake funkcije
+	echo_effect(buffer, size, 0.5, 10);
+
+
+}
+void HAL_I2S_TxCpltCallback(I2S_HandleTypeDef *hi2s) {
+    if (hi2s->Instance == SPI3) { // Provjeri je li I2S3
+    	i2s_ready = 1; // Ponovno generiraj i pošal
+    }
+}
+
 
 /* USER CODE END 4 */
 
