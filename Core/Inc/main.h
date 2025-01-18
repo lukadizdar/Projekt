@@ -125,9 +125,8 @@ void Error_Handler(void);
 #define MEMS_INT2_GPIO_Port GPIOE
 
 /* USER CODE BEGIN Private defines */
-void generate_dummy_signal(void);
-void process_signal(int16_t *buffer, int size);
-void apply_echo_effect(int16_t *buffer, int size, float echo_strength, int delay);
+void generate_fake_signal(uint16_t *buffer, int size);
+void echo_effect(uint16_t *buffer, int size, float echo_strength, int delay);
 #define BUFFER_SIZE 44
 #define SAMPLE_FREQ 44000
 #define SIGNAL_FREQ 440

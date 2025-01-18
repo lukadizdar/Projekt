@@ -54,9 +54,9 @@
 /* USER CODE BEGIN PV */
 uint16_t fake_signal[BUFFER_SIZE]; // Buffer za dummy signal
 uint16_t real_signal[BUFFER_SIZE];
-int i2s_gotov = 0;
 uint32_t last_systick = 0;
 uint32_t time_diff = 0;
+volatile uint8_t fx_ready = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -127,11 +127,17 @@ int main(void)
     MX_USB_HOST_Process();
 
     /* USER CODE BEGIN 3 */
-	echo_effect(real_signal, BUFFER_SIZE, 10, 0);
-
+    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_RESET);
+    if (fx_ready == 1) {
+        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_SET);
+		echo_effect(real_signal, BUFFER_SIZE, 100, 0);
+		fx_ready = 0;
+        HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_14);
+	}
+	}
   }
   /* USER CODE END 3 */
-}
+
 
 /**
   * @brief System Clock Configuration
@@ -199,11 +205,13 @@ void echo_effect(uint16_t *buffer, int size, float echo_strength, int delay) {
 }
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
-    if (htim->Instance == TIM2) {
-        // Generiraj dummy signal i simuliraj DMA prijenos - sada je generate fake signal napunio
+	if (htim->Instance == TIM2) {
+		 HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_RESET);
+		//sada je generate fake signal napunio real buffer
     		memcpy(real_signal, fake_signal, BUFFER_SIZE);
-    		echo_effect(real_signal, BUFFER_SIZE, 10, 0);
-            HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_15);
+//    		echo_effect(real_signal, BUFFER_SIZE, 10, 0);
+    		fx_ready = 1;
+            HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_SET);
 //            dma_simulation(fake_signal, BUFFER_SIZE);
           //echo_effect(buffer, size, 0.5, 10);
 
