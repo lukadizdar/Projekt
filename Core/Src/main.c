@@ -24,6 +24,7 @@
 #include "tim.h"
 #include "usb_host.h"
 #include "gpio.h"
+
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "audio.h"
@@ -52,7 +53,7 @@
 
 /* USER CODE BEGIN PV */
 uint16_t fake_signal[BUFFER_SIZE]; // Buffer za dummy signal
-uint16_t real_signal;
+uint16_t real_signal[BUFFER_SIZE];
 int i2s_gotov = 0;
 uint32_t last_systick = 0;
 uint32_t time_diff = 0;
@@ -106,11 +107,12 @@ int main(void)
   MX_USB_HOST_Init();
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
-  HAL_TIM_Base_Start_IT(&htim2);
+
   configAudio();
   last_systick = HAL_GetTick(); //traje 5 milisekundi
-//  generate_fake_signal(&fake_signal, BUFFER_SIZE); //traje 1 milisekundu
+  generate_fake_signal(fake_signal, BUFFER_SIZE); //traje 1 milisekundu
 //  last_systick = HAL_GetTick();
+  HAL_TIM_Base_Start_IT(&htim2);
 
   HAL_I2S_Transmit_IT(&hi2s3, fake_signal, BUFFER_SIZE);
   //uint16_t signal;
@@ -125,7 +127,7 @@ int main(void)
     MX_USB_HOST_Process();
 
     /* USER CODE BEGIN 3 */
-
+	echo_effect(real_signal, BUFFER_SIZE, 10, 0);
 
   }
   /* USER CODE END 3 */
@@ -199,24 +201,27 @@ void echo_effect(uint16_t *buffer, int size, float echo_strength, int delay) {
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
     if (htim->Instance == TIM2) {
         // Generiraj dummy signal i simuliraj DMA prijenos - sada je generate fake signal napunio
-
+    		memcpy(real_signal, fake_signal, BUFFER_SIZE);
+    		echo_effect(real_signal, BUFFER_SIZE, 10, 0);
             HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_15);
-            dma_simulation(fake_signal, BUFFER_SIZE);
+//            dma_simulation(fake_signal, BUFFER_SIZE);
+          //echo_effect(buffer, size, 0.5, 10);
 
     }
 }
 
-void dma_simulation(uint16_t *buffer, uint16_t size) {
-    //simuliramo punjenje buffera. interrupt traje točno 1 ms
-    generate_fake_signal(fake_signal, BUFFER_SIZE);
-	//sada je naš fake buffer pun fake signala pomoću fake funkcije
-	echo_effect(buffer, size, 0.5, 10);
-
-
-}
+//void dma_simulation(uint16_t *buffer, uint16_t size) {
+//    //simuliramo punjenje buffera. interrupt traje točno 1 ms
+////    generate_fake_signal(fake_signal, BUFFER_SIZE);
+//	//sada je naš fake buffer pun fake signala pomoću fake funkcije
+////	echo_effect(buffer, size, 0.5, 10);
+//
+//
+//}
 void HAL_I2S_TxCpltCallback(I2S_HandleTypeDef *hi2s) {
     if (hi2s->Instance == SPI3) { // Provjeri je li I2S3
-    	i2s_gotov = 1; // Ponovno generiraj i pošal
+    	last_systick = HAL_GetTick();
+    	HAL_I2S_Transmit_IT(&hi2s3, real_signal, BUFFER_SIZE);
     }
 }
 
