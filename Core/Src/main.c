@@ -27,6 +27,8 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#define ARM_MATH_CM4
+#include "arm_math.h"
 #include "audio.h"
 #include <stdlib.h>
 #include <math.h>
@@ -39,9 +41,12 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define BUFFER_SIZE 44
+#define BUFFER_SIZE 1024
 #define SAMPLE_FREQ 44000
-#define SIGNAL_FREQ 440
+#define SIGNAL1_FREQ 2000 // Frequency of the first sine wave in Hz
+#define SIGNAL2_FREQ 6000 // Frequency of the second sine wave in Hz
+#define NUM_TAPS 44 //ZA FILTER
+#define BLOCK_SIZE 32 // Start with 32, adjust as needed
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -57,6 +62,19 @@ uint16_t real_signal[BUFFER_SIZE];
 uint32_t last_systick = 0;
 uint32_t time_diff = 0;
 volatile uint8_t fx_ready = 0;
+q15_t convInputSignal[BUFFER_SIZE];
+q15_t outputSignal[BUFFER_SIZE];
+float32_t firCoeffs32[NUM_TAPS] = {
+    -0.0003, -0.0010, -0.0016, -0.0019, -0.0015,  0.0000,  0.0027,  0.0060,
+     0.0084,  0.0082,  0.0038, -0.0048, -0.0158, -0.0256, -0.0290, -0.0214,
+     0.0000,  0.0347,  0.0781,  0.1225,  0.1590,  0.1796,  0.1796,  0.1590,
+     0.1225,  0.0781,  0.0347,  0.0000, -0.0214, -0.0290, -0.0256, -0.0158,
+    -0.0048,  0.0038,  0.0082,  0.0084,  0.0060,  0.0027,  0.0000, -0.0015,
+    -0.0019, -0.0016, -0.0010, -0.0003
+};
+q15_t firCoeffsQ15[NUM_TAPS];
+q15_t firStateQ15[NUM_TAPS + BLOCK_SIZE - 1]; // FIR state buffer
+arm_fir_instance_q15 S;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -110,11 +128,14 @@ int main(void)
 
   configAudio();
   last_systick = HAL_GetTick(); //traje 5 milisekundi
-  generate_fake_signal(fake_signal, BUFFER_SIZE); //traje 1 milisekundu
+  generate_test_signal(fake_signal, BUFFER_SIZE); //traje 1 milisekundu
 //  last_systick = HAL_GetTick();
   HAL_TIM_Base_Start_IT(&htim2);
 
   HAL_I2S_Transmit_IT(&hi2s3, fake_signal, BUFFER_SIZE);
+  last_systick = HAL_GetTick();
+
+  last_systick = HAL_GetTick();
   //uint16_t signal;
 
   /* USER CODE END 2 */
@@ -127,17 +148,24 @@ int main(void)
     MX_USB_HOST_Process();
 
     /* USER CODE BEGIN 3 */
-    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_RESET);
+    last_systick = HAL_GetTick();
     if (fx_ready == 1) {
-        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_SET);
-		echo_effect(real_signal, BUFFER_SIZE, 100, 0);
 		fx_ready = 0;
-        HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_14);
+		 last_systick = HAL_GetTick();
+		 convert_to_q15(real_signal, convInputSignal, BUFFER_SIZE);
+		 last_systick = HAL_GetTick();
+
+        last_systick = HAL_GetTick();
+//		echo_effect(convInputSignal, BUFFER_SIZE, 10, 0.5);
+		last_systick = HAL_GetTick();
+
+//        init_fir_filter();
+//        fir_filter();
+
 	}
 	}
   }
   /* USER CODE END 3 */
-
 
 /**
   * @brief System Clock Configuration
@@ -185,14 +213,26 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
-void generate_fake_signal(uint16_t *buffer, int size) {
+void generate_test_signal(uint16_t *buffer, int size) {
     for (int i = 0; i < size; i++) {
-        float sine_wave = sin(2 * M_PI * SIGNAL_FREQ * i / SAMPLE_FREQ);
-        float noise = ((float)rand() / RAND_MAX) * 0.1 - 0.05; // Šum [-0.05, 0.05]
-        buffer[i] = (uint16_t)((sine_wave + noise) * 32767 + 32768); // Prebaci u unsigned 16-bitni format
-    }
+        // Generate a 2 kHz sine wave
+        float sine_wave1 = sinf(2 * M_PI * SIGNAL1_FREQ * i / SAMPLE_FREQ);
 
+        // Generate a 6 kHz sine wave
+        float sine_wave2 = sinf(2 * M_PI * SIGNAL2_FREQ * i / SAMPLE_FREQ);
+
+        // Combine the two sine waves
+        float combined_signal = sine_wave1 + sine_wave2;
+
+        // Add some random noise to simulate MEMS microphone behavior
+        float noise = ((float)rand() / RAND_MAX) * 0.1f - 0.05f; // Noise in the range [-0.05, 0.05]
+
+        // Scale the combined signal to uint16_t range [0, 65535]
+        buffer[i] = (uint16_t)((combined_signal + noise) * 32767.0f + 32768.0f);
+        buffer[i] = 0;
+    }
 }
+//ECHO EFEKT
 void echo_effect(uint16_t *buffer, int size, float echo_strength, int delay) {
     static uint16_t echo_buffer[BUFFER_SIZE * 2] = {0}; // Povećan buffer za "delay"
     for (int i = 0; i < size; i++) {
@@ -203,35 +243,42 @@ void echo_effect(uint16_t *buffer, int size, float echo_strength, int delay) {
         echo_buffer[i] = buffer[i];
     }
 }
+//FIR FILTER
+void convert_to_q15(uint16_t *rawInput, q15_t *convertedSignal, int size) {
+    for (int i = 0; i < size; i++) {
+        // Map uint16_t (0 to 65535) to q15_t (-32768 to 32767)
+        convertedSignal[i] = (q15_t)((int16_t)(rawInput[i] - 32768));
+    }
+}
+
+void init_fir_filter(void) {
+    arm_float_to_q15(firCoeffs32, firCoeffsQ15, NUM_TAPS);
+    arm_fir_init_q15(&S, NUM_TAPS, firCoeffsQ15, firStateQ15, BLOCK_SIZE);
+}
+void fir_filter(void) {
+    for (int i = 0; i < BUFFER_SIZE; i += BLOCK_SIZE) {
+        arm_fir_q15(&S, &convInputSignal[i], &outputSignal[i], BLOCK_SIZE);
+    }
+}
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 	if (htim->Instance == TIM2) {
-		 HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_RESET);
 		//sada je generate fake signal napunio real buffer
     		memcpy(real_signal, fake_signal, BUFFER_SIZE);
-//    		echo_effect(real_signal, BUFFER_SIZE, 10, 0);
     		fx_ready = 1;
             HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_SET);
-//            dma_simulation(fake_signal, BUFFER_SIZE);
-          //echo_effect(buffer, size, 0.5, 10);
 
     }
 }
 
-//void dma_simulation(uint16_t *buffer, uint16_t size) {
-//    //simuliramo punjenje buffera. interrupt traje točno 1 ms
-////    generate_fake_signal(fake_signal, BUFFER_SIZE);
-//	//sada je naš fake buffer pun fake signala pomoću fake funkcije
-////	echo_effect(buffer, size, 0.5, 10);
-//
-//
-//}
 void HAL_I2S_TxCpltCallback(I2S_HandleTypeDef *hi2s) {
     if (hi2s->Instance == SPI3) { // Provjeri je li I2S3
     	last_systick = HAL_GetTick();
-    	HAL_I2S_Transmit_IT(&hi2s3, real_signal, BUFFER_SIZE);
+    	HAL_I2S_Transmit_IT(&hi2s3, convInputSignal, BUFFER_SIZE);
     }
 }
+
+
 
 
 /* USER CODE END 4 */
