@@ -24,6 +24,7 @@
 #include "i2s.h"
 #include "spi.h"
 #include "tim.h"
+#include "usart.h"
 #include "usb_host.h"
 #include "gpio.h"
 
@@ -178,6 +179,7 @@ int main(void)
   MX_USB_HOST_Init();
   MX_TIM2_Init();
   MX_ADC1_Init();
+  MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
 
   configAudio();
@@ -188,6 +190,12 @@ int main(void)
 
   HAL_I2S_Transmit_DMA(&hi2s3, filtered_signal, BUFFER_SIZE);
 
+  HAL_UART_Transmit_DMA(&huart2, (uint8_t *)filtered_signal, sizeof(filtered_signal));
+  char testMessage[] = "Hello, PuTTY!\n";
+//  HAL_UART_Transmit(&huart2, (uint8_t *)testMessage, sizeof(testMessage) - 1, HAL_MAX_DELAY);
+
+
+
 
 
   /* USER CODE END 2 */
@@ -197,6 +205,7 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
+    MX_USB_HOST_Process();
 
     /* USER CODE BEGIN 3 */
     if (fx_ready == 1) {
