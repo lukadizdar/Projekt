@@ -125,11 +125,7 @@ void Error_Handler(void);
 #define MEMS_INT2_GPIO_Port GPIOE
 
 /* USER CODE BEGIN Private defines */
-void generate_fake_signal(uint16_t *buffer, int size);
-void echo_effect(uint16_t *buffer, int size, float echo_strength, int delay);
-#define BUFFER_SIZE 44
-#define SAMPLE_FREQ 44000
-#define SIGNAL_FREQ 440
+void echo_effect(uint16_t *buffer, uint16_t *outputBuffer, int size, float echo_strength, int delay);
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

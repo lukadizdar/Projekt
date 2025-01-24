@@ -18,6 +18,8 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "adc.h"
+#include "dma.h"
 #include "i2c.h"
 #include "i2s.h"
 #include "spi.h"
@@ -41,12 +43,13 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define BUFFER_SIZE 1024
-#define SAMPLE_FREQ 44000
-#define SIGNAL1_FREQ 2000 // Frequency of the first sine wave in Hz
-#define SIGNAL2_FREQ 6000 // Frequency of the second sine wave in Hz
-#define NUM_TAPS 44 //ZA FILTER
-#define BLOCK_SIZE 32 // Start with 32, adjust as needed
+#define BUFFER_SIZE 512
+#define NUM_TAPS 64 //ZA FILTER KOLIKO JE IDEALAN
+#define SAMPLE_FREQ 43478
+#define BLOCK_SIZE 128 //
+#define ECHO_DELAY 512 // Delay in samples
+#define ECHO_STRENGTH 0.7f // Echo strength (0.0 to 1.0)
+#define FFT_SIZE 512
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -57,23 +60,27 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-uint16_t fake_signal[BUFFER_SIZE]; // Buffer za dummy signal
-uint16_t real_signal[BUFFER_SIZE];
-uint32_t last_systick = 0;
-uint32_t time_diff = 0;
+//uint16_t fake_signal[BUFFER_SIZE]; // Buffer za dummy signal
+uint16_t adc_signal[BUFFER_SIZE];
+q15_t fake_signal[BUFFER_SIZE];
 volatile uint8_t fx_ready = 0;
-q15_t convInputSignal[BUFFER_SIZE];
-q15_t outputSignal[BUFFER_SIZE];
+uint32_t last_systick = 0;
+q15_t conv_signal[BUFFER_SIZE];
+q15_t filtered_signal[BUFFER_SIZE];
+q15_t output_signal[BUFFER_SIZE];
 float32_t firCoeffs32[NUM_TAPS] = {
-    -0.0003, -0.0010, -0.0016, -0.0019, -0.0015,  0.0000,  0.0027,  0.0060,
-     0.0084,  0.0082,  0.0038, -0.0048, -0.0158, -0.0256, -0.0290, -0.0214,
-     0.0000,  0.0347,  0.0781,  0.1225,  0.1590,  0.1796,  0.1796,  0.1590,
-     0.1225,  0.0781,  0.0347,  0.0000, -0.0214, -0.0290, -0.0256, -0.0158,
-    -0.0048,  0.0038,  0.0082,  0.0084,  0.0060,  0.0027,  0.0000, -0.0015,
-    -0.0019, -0.0016, -0.0010, -0.0003
+    -0.0005, -0.0008, -0.0009, -0.0008, -0.0003,  0.0006,  0.0016,  0.0024,
+     0.0025,  0.0015, -0.0006, -0.0034, -0.0059, -0.0068, -0.0053, -0.0011,
+     0.0051,  0.0114,  0.0152,  0.0142,  0.0072, -0.0050, -0.0193, -0.0311,
+    -0.0347, -0.0257, -0.0020,  0.0348,  0.0797,  0.1248,  0.1613,  0.1818,
+     0.1818,  0.1613,  0.1248,  0.0797,  0.0348, -0.0020, -0.0257, -0.0347,
+    -0.0311, -0.0193, -0.0050,  0.0072,  0.0142,  0.0152,  0.0114,  0.0051,
+    -0.0011, -0.0053, -0.0068, -0.0059, -0.0034, -0.0006,  0.0015,  0.0025,
+     0.0024,  0.0016,  0.0006, -0.0003, -0.0008, -0.0009, -0.0008, -0.0005
 };
 q15_t firCoeffsQ15[NUM_TAPS];
 q15_t firStateQ15[NUM_TAPS + BLOCK_SIZE - 1]; // FIR state buffer
+
 arm_fir_instance_q15 S;
 /* USER CODE END PV */
 
@@ -107,7 +114,6 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-  last_systick = HAL_GetTick();
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -119,24 +125,24 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_I2C1_Init();
   MX_I2S3_Init();
   MX_SPI1_Init();
   MX_USB_HOST_Init();
   MX_TIM2_Init();
+  MX_ADC1_Init();
   /* USER CODE BEGIN 2 */
 
   configAudio();
-  last_systick = HAL_GetTick(); //traje 5 milisekundi
-  generate_test_signal(fake_signal, BUFFER_SIZE); //traje 1 milisekundu
-//  last_systick = HAL_GetTick();
-  HAL_TIM_Base_Start_IT(&htim2);
+  init_fir_filter();
 
-  HAL_I2S_Transmit_IT(&hi2s3, fake_signal, BUFFER_SIZE);
-  last_systick = HAL_GetTick();
+  HAL_TIM_Base_Start(&htim2);
+  HAL_ADC_Start_DMA(&hadc1, adc_signal, BUFFER_SIZE);
 
-  last_systick = HAL_GetTick();
-  //uint16_t signal;
+  HAL_I2S_Transmit_DMA(&hi2s3, filtered_signal, BUFFER_SIZE);
+
+
 
   /* USER CODE END 2 */
 
@@ -145,27 +151,38 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
-    MX_USB_HOST_Process();
+//    MX_USB_HOST_Process();
 
     /* USER CODE BEGIN 3 */
-    last_systick = HAL_GetTick();
     if (fx_ready == 1) {
 		fx_ready = 0;
 		 last_systick = HAL_GetTick();
-		 convert_to_q15(real_signal, convInputSignal, BUFFER_SIZE);
+		 convert_to_q15(adc_signal, conv_signal, BUFFER_SIZE);
 		 last_systick = HAL_GetTick();
 
         last_systick = HAL_GetTick();
-//		echo_effect(convInputSignal, BUFFER_SIZE, 10, 0.5);
+//		echo_effect(conv_signal, output_signal, BUFFER_SIZE, 0.5, 0.5);
 		last_systick = HAL_GetTick();
 
-//        init_fir_filter();
-//        fir_filter();
+//		fir_filter(conv_signal, filtered_signal);
+
+
+
+
+//		echo_effect_q15(conv_signal, output_signal, BUFFER_SIZE);
+//		tremolo_effect(conv_signal, output_signal, BUFFER_SIZE, 440);
+		fir_filter(conv_signal, filtered_signal);
+		last_systick = HAL_GetTick();
+
+
+
+
+        last_systick = HAL_GetTick();
 
 	}
 	}
-  }
   /* USER CODE END 3 */
+}
 
 /**
   * @brief System Clock Configuration
@@ -213,41 +230,63 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
-void generate_test_signal(uint16_t *buffer, int size) {
-    for (int i = 0; i < size; i++) {
-        // Generate a 2 kHz sine wave
-        float sine_wave1 = sinf(2 * M_PI * SIGNAL1_FREQ * i / SAMPLE_FREQ);
 
-        // Generate a 6 kHz sine wave
-        float sine_wave2 = sinf(2 * M_PI * SIGNAL2_FREQ * i / SAMPLE_FREQ);
-
-        // Combine the two sine waves
-        float combined_signal = sine_wave1 + sine_wave2;
-
-        // Add some random noise to simulate MEMS microphone behavior
-        float noise = ((float)rand() / RAND_MAX) * 0.1f - 0.05f; // Noise in the range [-0.05, 0.05]
-
-        // Scale the combined signal to uint16_t range [0, 65535]
-        buffer[i] = (uint16_t)((combined_signal + noise) * 32767.0f + 32768.0f);
-        buffer[i] = 0;
-    }
-}
 //ECHO EFEKT
-void echo_effect(uint16_t *buffer, int size, float echo_strength, int delay) {
+void echo_effect(uint16_t *buffer, uint16_t *outputBuffer, int size, float echo_strength, int delay) {
     static uint16_t echo_buffer[BUFFER_SIZE * 2] = {0}; // Povećan buffer za "delay"
     for (int i = 0; i < size; i++) {
         int delayed_index = i - delay;
         if (delayed_index >= 0) {
-            buffer[i] += (uint16_t)(echo_strength * echo_buffer[delayed_index]);
+            outputBuffer[i] = buffer + (uint16_t)(echo_strength * echo_buffer[delayed_index]);
         }
         echo_buffer[i] = buffer[i];
     }
 }
+
+void echo_effect_q15(q15_t *input, q15_t *output, int size) {
+    static q15_t echo_buffer[ECHO_DELAY] = {0}; // Circular buffer for delay
+    static int echo_index = 0;
+
+    q15_t scaled_echo;
+    q15_t echo_multiplier = (q15_t)(ECHO_STRENGTH * 32767); // Convert strength to Q15 format
+
+    for (int i = 0; i < size; i++) {
+        // Scale the delayed sample by echo strength
+//        arm_scale_q15(&echo_buffer[echo_index], echo_multiplier, 0, &scaled_echo, 1);
+        arm_scale_q15(&scaled_echo, 0.8 * 32767, 0, &scaled_echo, 1);
+
+
+        // Add scaled echo to the input signal
+        output[i] = __SSAT((int32_t)(input[i] * 0.8f + scaled_echo), 16);
+
+
+        // Store the current sample in the circular buffer
+        echo_buffer[echo_index] = input[i];
+
+        // Increment and wrap the index
+        echo_index = (echo_index + 1) % ECHO_DELAY;
+    }
+}
+
+void tremolo_effect(q15_t *input, q15_t *output, int size, float freq) {
+    static float phase = 0.0f;
+    float increment = (2.0f * PI * freq) / SAMPLE_FREQ;
+
+    for (int i = 0; i < size; i++) {
+        float modulation = 0.5f * (1.0f + arm_sin_f32(phase)); // Modulation range: 0.5 to 1
+        output[i] = __SSAT((int32_t)(input[i] * modulation), 16); //ssat sprijeci clipping
+        phase += increment;
+        if (phase > 2.0f * PI) phase -= 2.0f * PI;
+    }
+}
+
+
+
 //FIR FILTER
 void convert_to_q15(uint16_t *rawInput, q15_t *convertedSignal, int size) {
     for (int i = 0; i < size; i++) {
         // Map uint16_t (0 to 65535) to q15_t (-32768 to 32767)
-        convertedSignal[i] = (q15_t)((int16_t)(rawInput[i] - 32768));
+        convertedSignal[i] = (q15_t)((int32_t)(rawInput[i] - 32768));
     }
 }
 
@@ -255,26 +294,29 @@ void init_fir_filter(void) {
     arm_float_to_q15(firCoeffs32, firCoeffsQ15, NUM_TAPS);
     arm_fir_init_q15(&S, NUM_TAPS, firCoeffsQ15, firStateQ15, BLOCK_SIZE);
 }
-void fir_filter(void) {
+void fir_filter(q15_t *input, q15_t *output) {
     for (int i = 0; i < BUFFER_SIZE; i += BLOCK_SIZE) {
-        arm_fir_q15(&S, &convInputSignal[i], &outputSignal[i], BLOCK_SIZE);
+        arm_fir_q15(&S, &input[i], &output[i], BLOCK_SIZE);
     }
 }
+void rfft(q15_t *inputSignal, q15_t *fftOutput, q15_t *magnitudeSpectrum) {
+    arm_rfft_instance_q15 rfftInstance;
 
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
-	if (htim->Instance == TIM2) {
-		//sada je generate fake signal napunio real buffer
-    		memcpy(real_signal, fake_signal, BUFFER_SIZE);
-    		fx_ready = 1;
-            HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_SET);
+    arm_rfft_init_q15(&rfftInstance, FFT_SIZE, 0, 1);
 
-    }
+    arm_rfft_q15(&rfftInstance, inputSignal, fftOutput); //rfft buffer izgleda jako cudno tho, DC, Nyquist, real1, imag1,
+
+    arm_cmplx_mag_q15(fftOutput, magnitudeSpectrum, FFT_SIZE / 2); //ovo je za magnitudes, mora biti /2 jer je simetrično, nyquistov dijagram iz automatskog samo poz frekv
+}
+
+
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc1) {
+	fx_ready = 1;
+//	last_dma_systick = __HAL_TIM_GET_COUNTER(&htim2);
 }
 
 void HAL_I2S_TxCpltCallback(I2S_HandleTypeDef *hi2s) {
-    if (hi2s->Instance == SPI3) { // Provjeri je li I2S3
-    	last_systick = HAL_GetTick();
-    	HAL_I2S_Transmit_IT(&hi2s3, convInputSignal, BUFFER_SIZE);
+    if (hi2s->Instance == SPI3) {
     }
 }
 
