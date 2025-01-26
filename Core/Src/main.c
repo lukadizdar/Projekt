@@ -64,6 +64,7 @@
 /* USER CODE BEGIN PV */
 //uint16_t fake_signal[BUFFER_SIZE]; // Buffer za dummy signal
 uint16_t adc_signal[BUFFER_SIZE];
+uint16_t output_signal[BUFFER_SIZE];
 q15_t fake_signal[BUFFER_SIZE];
 volatile uint8_t fx_ready = 0;
 uint32_t last_systick = 0;
@@ -190,8 +191,9 @@ int main(void)
 
   HAL_I2S_Transmit_DMA(&hi2s3, filtered_signal, BUFFER_SIZE);
 
+//  HAL_UART_Transmit_DMA(&huart2, (uint8_t *)filtered_signal, sizeof(filtered_signal));
   HAL_UART_Transmit_DMA(&huart2, (uint8_t *)filtered_signal, sizeof(filtered_signal));
-  char testMessage[] = "Hello, PuTTY!\n";
+//  char testMessage[] = "Hello, PuTTY!\n";
 //  HAL_UART_Transmit(&huart2, (uint8_t *)testMessage, sizeof(testMessage) - 1, HAL_MAX_DELAY);
 
 
@@ -220,9 +222,10 @@ int main(void)
 //		last_systick = HAL_GetTick();
 
 		last_systick = HAL_GetTick();
-		amplify_signal_q15(conv_signal, gained_signal, BUFFER_SIZE, 1.2f);
+//		amplify_signal_q15(conv_signal, gained_signal, BUFFER_SIZE, 1.3f);
 		last_systick = HAL_GetTick();
-		fir_filter(gained_signal, filtered_signal); //traje 3 milisekunde
+		fir_filter(conv_signal, filtered_signal); //traje 3 milisekunde
+
 		last_systick = HAL_GetTick();
 
 
@@ -337,8 +340,8 @@ void tremolo_effect(q15_t *input, q15_t *output, int size, float freq) {
 void convert_to_q15(uint16_t *rawInput, q15_t *convertedSignal, int size) {
     for (int i = 0; i < size; i++) {
         // Map uint16_t (0 to 65535) to q15_t (-32768 to 32767)
-//        convertedSignal[i] = (q15_t)((int32_t)(rawInput[i] - 32768));
-        convertedSignal[i] = (q15_t)((int32_t)(rawInput[i] - 0));
+        convertedSignal[i] = (q15_t)((int32_t)(rawInput[i] - 32768));
+//        convertedSignal[i] = (q15_t)((int32_t)(rawInput[i] - 0));
     }
 }
 
