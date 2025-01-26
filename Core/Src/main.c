@@ -44,7 +44,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define BUFFER_SIZE 512
+#define BUFFER_SIZE 1024
 #define NUM_TAPS 512 //ZA FILTER KOLIKO JE IDEALAN
 #define SAMPLE_FREQ 43478
 #define BLOCK_SIZE 256 //
@@ -222,7 +222,7 @@ int main(void)
 //		last_systick = HAL_GetTick();
 
 		last_systick = HAL_GetTick();
-//		amplify_signal_q15(conv_signal, gained_signal, BUFFER_SIZE, 1.3f);
+//		amplify_signal_q15(conv_signal, gained_signal, BUFFER_SIZE, 1.0f);
 		last_systick = HAL_GetTick();
 		fir_filter(conv_signal, filtered_signal); //traje 3 milisekunde
 
@@ -340,8 +340,9 @@ void tremolo_effect(q15_t *input, q15_t *output, int size, float freq) {
 void convert_to_q15(uint16_t *rawInput, q15_t *convertedSignal, int size) {
     for (int i = 0; i < size; i++) {
         // Map uint16_t (0 to 65535) to q15_t (-32768 to 32767)
-        convertedSignal[i] = (q15_t)((int32_t)(rawInput[i] - 32768));
+//        convertedSignal[i] = (q15_t)((int32_t)(rawInput[i] - 32768));
 //        convertedSignal[i] = (q15_t)((int32_t)(rawInput[i] - 0));
+    	convertedSignal[i] = (q15_t)((rawInput[i] * 32767) / 4096);
     }
 }
 
