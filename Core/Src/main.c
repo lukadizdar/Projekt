@@ -76,8 +76,7 @@ volatile uint8_t fx_ready = 0;
 uint32_t last_systick = 0;
 q15_t conv_signal[BUFFER_SIZE];
 q15_t filtered_signal[BUFFER_SIZE];
-q15_t gained_signal[BUFFER_SIZE];
-q15_t compressed_signal[BUFFER_SIZE];
+q15_t i2s_signal[BUFFER_SIZE*2];
 //q15_t output_signal[BUFFER_SIZE];
 //q15_t output_signal[BUFFER_SIZE];
 //256 bitna verzija
@@ -211,24 +210,17 @@ int main(void)
   MX_ADC1_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
-  q15_t test = 20202;
-  q15_t rezultat = 20202*2;
+  q15_t test = -2022;   // Skaliraj 2022 na Q15 format
+  float izbor = 0.1;
+  q15_t multiplier = (q15_t)(0x7FFF * izbor);         // Q15 format za 1.0
+  q15_t rezultat = 0;
+  arm_mult_q15(&test, &multiplier, &rezultat, 1);
 
   configAudio();
   init_fir_filter();
 
   HAL_TIM_Base_Start(&htim2);
   HAL_ADC_Start_DMA(&hadc1, adc_signal, BUFFER_SIZE);
-
-
-
-//  HAL_UART_Transmit_DMA(&huart2, (uint8_t *)filtered_signal, sizeof(filtered_signal));
-//  HAL_UART_Transmit_DMA(&huart2, (uint8_t *)adc_signal, sizeof(adc_signal));
-//  char testMessage[] = "Hello, PuTTY!\n";
-//  HAL_UART_Transmit(&huart2, (uint8_t *)testMessage, sizeof(testMessage) - 1, HAL_MAX_DELAY);
-
-
-
 
 
   /* USER CODE END 2 */
@@ -256,10 +248,10 @@ int main(void)
 //		amplify_signal_q15(conv_signal, gained_signal, BUFFER_SIZE, 1.0f);
 		last_systick = HAL_GetTick();
 
-//		limiter(conv_signal, output_signal, BUFFER_SIZE, 25000);
 		fir_filter(conv_signal, filtered_signal);
-//		amplify_q15_cmsis(filtered_signal, output_signal, BUFFER_SIZE, 4915);
-		if (flag_uart) callUart(adc_signal);
+//		amplify_q15_cmsis(filtered_signal, output_signal, BUFFER_SIZE, 0.1f);
+		convert_to_i2s(filtered_signal, i2s_signal, BUFFER_SIZE);
+		if (flag_uart) callUart(i2s_signal);
 		flag_uart = 0;
 //		process_equalizer(filtered_signal, output_signal, BUFFER_SIZE);
 //		amplify_signal_q15(filtered_signal, output_signal, BUFFER_SIZE, 1.4f);
@@ -376,12 +368,12 @@ void tremolo_effect(q15_t *input, q15_t *output, int size, float freq) {
     }
 }
 
-void amplify_q15_cmsis(const int16_t *input_signal, int16_t *output_signal, size_t length, int16_t gain) {
-    int16_t gain_array[length]; // Array of gains
+void amplify_q15_cmsis(const q15_t *input_signal, q15_t *output_signal, size_t length, float gain_percent) {
+    q15_t gain = (q15_t)(0x7FFF * gain_percent);
+	q15_t gain_array[length]; // Array of gains
     for (size_t i = 0; i < length; i++) {
         gain_array[i] = gain;
     }
-
     // Use CMSIS function for vectorized Q15 multiplication
     arm_mult_q15(input_signal, gain_array, output_signal, length);
 }
@@ -389,13 +381,32 @@ void amplify_q15_cmsis(const int16_t *input_signal, int16_t *output_signal, size
 
 //FIR FILTER
 void convert_to_q15(uint16_t *rawInput, q15_t *convertedSignal, int size) {
-    for (int i = 0; i < size; i++) {
+    int i = 0;
         // Map uint16_t (0 to 65535) to q15_t (-32768 to 32767)
 //        convertedSignal[i] = (q15_t)((int32_t)(rawInput[i] - 32768));
-//        convertedSignal[i] = (q15_t)((int32_t)(rawInput[i] - 0));
-    	convertedSignal[i] = (q15_t)((rawInput[i] * 32767) / 4096);
-    }
+        for (i = 0; i < size; i++) {
+        	convertedSignal[i] = (q15_t)((int32_t)(rawInput[i]));
+        }
+//    	convertedSignal[i] = (q15_t)((int32_t)(rawInput[i]));
+//    	convertedSignal[i] = (q15_t)((rawInput[i] * 32767) / 4096);
+//    	for (int j = 0; j < size*2; j += 2) {
+//    		convertedSignal[j] = (q15_t)(rawInput[i]);
+//    		convertedSignal[j+1] = (q15_t)(rawInput[i]);
+//    		i++;
+//    	}
+
 }
+
+void convert_to_i2s(q15_t *rawInput, q15_t *convertedSignal, int size) {
+    int i = 0;
+    	for (int j = 0; j < size*2; j += 2) {
+    		convertedSignal[j] = (q15_t)(rawInput[i]);
+    		convertedSignal[j+1] = (q15_t)(rawInput[i]);
+    		i++;
+    	}
+}
+
+
 
 void callUart(uint16_t* input) {
 	  HAL_UART_Transmit_DMA(&huart2, (uint8_t *)input, sizeof(input));
@@ -424,20 +435,6 @@ void rfft(q15_t *inputSignal, q15_t *fftOutput, q15_t *magnitudeSpectrum) {
     arm_cmplx_mag_q15(fftOutput, magnitudeSpectrum, FFT_SIZE / 2); //ovo je za magnitudes, mora biti /2 jer je simetrično, nyquistov dijagram iz automatskog samo poz frekv
 }
 
-
-
-void amplify_signal_q15(q15_t *input, q15_t *output, int len, float gain) {
-    for (int i = 0; i < len; i++) {
-    	int32_t amplified = (int32_t)((float)input[i] * gain);
-        if (amplified > 32767) {
-            output[i] = 32767;
-        } else if (amplified < -32768) {
-            output[i] = -32768;
-        } else {
-            output[i] = (q15_t)amplified;
-        }
-    }
-}
 
 void init_filters() {
     arm_biquad_cascade_df1_init_q15(&eqBands[0], 1, band1_coeffs, band1_state, 0);
