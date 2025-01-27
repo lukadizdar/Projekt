@@ -33,6 +33,7 @@
 #define ARM_MATH_CM4
 #include "arm_math.h"
 #include "audio.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
 /* USER CODE END Includes */
@@ -44,10 +45,10 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define BUFFER_SIZE 1024
+#define BUFFER_SIZE 512
 #define NUM_TAPS 512 //ZA FILTER KOLIKO JE IDEALAN
 #define SAMPLE_FREQ 43478
-#define BLOCK_SIZE 256 //
+#define BLOCK_SIZE 64 //
 #define ECHO_DELAY 512 // Delay in samples
 #define ECHO_STRENGTH 0.7f // Echo strength (0.0 to 1.0)
 #define FFT_SIZE 512
@@ -57,6 +58,11 @@
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
 
+
+
+
+
+
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
@@ -64,7 +70,7 @@
 /* USER CODE BEGIN PV */
 //uint16_t fake_signal[BUFFER_SIZE]; // Buffer za dummy signal
 uint16_t adc_signal[BUFFER_SIZE];
-uint16_t output_signal[BUFFER_SIZE];
+q15_t output_signal[BUFFER_SIZE];
 q15_t fake_signal[BUFFER_SIZE];
 volatile uint8_t fx_ready = 0;
 uint32_t last_systick = 0;
@@ -130,6 +136,30 @@ q15_t firCoeffsQ15[NUM_TAPS];
 q15_t firStateQ15[NUM_TAPS + BLOCK_SIZE - 1]; // FIR state buffer
 
 arm_fir_instance_q15 S;
+//IIR
+//q15_t band1_coeffs[5] = {8, 0, -16, 0, 8};       // Band 1 ZA 80-8000
+//q15_t band2_coeffs[5] = {76, 0, -152, 0, 76};    // Band 2
+//q15_t band3_coeffs[5] = {551, 0, -1102, 0, 551}; // Band 3
+//q15_t band4_coeffs[5] = {1140, 0, -2280, 0, 1140}; // Band 4
+//q15_t band5_coeffs[5] = {3672, 0, -7344, 0, 3672}; // Band 5
+
+q15_t band1_coeffs[5] = {7, 0, -13, 0, 7};       // Narrower Band 1
+q15_t band2_coeffs[5] = {26, 0, -51, 0, 26};     // Narrower Band 2
+q15_t band3_coeffs[5] = {98, 0, -197, 0, 98};    // Narrower Band 3
+q15_t band4_coeffs[5] = {213, 0, -426, 0, 213};  // Narrower Band 4
+q15_t band5_coeffs[5] = {56, 0, -113, 0, 56};
+volatile uint32_t buffer_overrun_count = 0;
+volatile uint8_t flag_uart = 0;
+volatile uint8_t call_uart_once = 1;
+
+q15_t band1_state[4] = {0};
+q15_t band2_state[4] = {0};
+q15_t band3_state[4] = {0};
+q15_t band4_state[4] = {0};
+q15_t band5_state[4] = {0};
+arm_biquad_casd_df1_inst_q15 eqBands[5];
+
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -153,7 +183,6 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -182,6 +211,8 @@ int main(void)
   MX_ADC1_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
+  q15_t test = 20202;
+  q15_t rezultat = 20202*2;
 
   configAudio();
   init_fir_filter();
@@ -189,10 +220,10 @@ int main(void)
   HAL_TIM_Base_Start(&htim2);
   HAL_ADC_Start_DMA(&hadc1, adc_signal, BUFFER_SIZE);
 
-  HAL_I2S_Transmit_DMA(&hi2s3, filtered_signal, BUFFER_SIZE);
+
 
 //  HAL_UART_Transmit_DMA(&huart2, (uint8_t *)filtered_signal, sizeof(filtered_signal));
-  HAL_UART_Transmit_DMA(&huart2, (uint8_t *)filtered_signal, sizeof(filtered_signal));
+//  HAL_UART_Transmit_DMA(&huart2, (uint8_t *)adc_signal, sizeof(adc_signal));
 //  char testMessage[] = "Hello, PuTTY!\n";
 //  HAL_UART_Transmit(&huart2, (uint8_t *)testMessage, sizeof(testMessage) - 1, HAL_MAX_DELAY);
 
@@ -224,7 +255,18 @@ int main(void)
 		last_systick = HAL_GetTick();
 //		amplify_signal_q15(conv_signal, gained_signal, BUFFER_SIZE, 1.0f);
 		last_systick = HAL_GetTick();
-		fir_filter(conv_signal, filtered_signal); //traje 3 milisekunde
+
+//		limiter(conv_signal, output_signal, BUFFER_SIZE, 25000);
+		fir_filter(conv_signal, filtered_signal);
+//		amplify_q15_cmsis(filtered_signal, output_signal, BUFFER_SIZE, 4915);
+		if (flag_uart) callUart(adc_signal);
+		flag_uart = 0;
+//		process_equalizer(filtered_signal, output_signal, BUFFER_SIZE);
+//		amplify_signal_q15(filtered_signal, output_signal, BUFFER_SIZE, 1.4f);
+
+//		tremolo_effect(filtered_signal, output_signal, BUFFER_SIZE, 440);
+//		echo_effect(filtered_signal, output_signal, BUFFER_SIZE, 0.5, 0.5);
+
 
 		last_systick = HAL_GetTick();
 
@@ -334,6 +376,15 @@ void tremolo_effect(q15_t *input, q15_t *output, int size, float freq) {
     }
 }
 
+void amplify_q15_cmsis(const int16_t *input_signal, int16_t *output_signal, size_t length, int16_t gain) {
+    int16_t gain_array[length]; // Array of gains
+    for (size_t i = 0; i < length; i++) {
+        gain_array[i] = gain;
+    }
+
+    // Use CMSIS function for vectorized Q15 multiplication
+    arm_mult_q15(input_signal, gain_array, output_signal, length);
+}
 
 
 //FIR FILTER
@@ -345,6 +396,14 @@ void convert_to_q15(uint16_t *rawInput, q15_t *convertedSignal, int size) {
     	convertedSignal[i] = (q15_t)((rawInput[i] * 32767) / 4096);
     }
 }
+
+void callUart(uint16_t* input) {
+	  HAL_UART_Transmit_DMA(&huart2, (uint8_t *)input, sizeof(input));
+	  HAL_I2S_Transmit_DMA(&hi2s3, input, BUFFER_SIZE);
+}
+
+
+
 
 void init_fir_filter(void) {
     arm_float_to_q15(firCoeffs, firCoeffsQ15, NUM_TAPS);
@@ -380,15 +439,56 @@ void amplify_signal_q15(q15_t *input, q15_t *output, int len, float gain) {
     }
 }
 
+void init_filters() {
+    arm_biquad_cascade_df1_init_q15(&eqBands[0], 1, band1_coeffs, band1_state, 0);
+    arm_biquad_cascade_df1_init_q15(&eqBands[1], 1, band2_coeffs, band2_state, 0);
+    arm_biquad_cascade_df1_init_q15(&eqBands[2], 1, band3_coeffs, band3_state, 0);
+    arm_biquad_cascade_df1_init_q15(&eqBands[3], 1, band4_coeffs, band4_state, 0);
+    arm_biquad_cascade_df1_init_q15(&eqBands[4], 1, band5_coeffs, band5_state, 0);
+}
+void process_equalizer(q15_t *input, q15_t *output, uint32_t blockSize) {
+    q15_t bandOutputs[5][blockSize];   // Temporary storage for each band output
+    q15_t gains[5] = {0xF000, 0xF800, 0xF800, 0xF000, 0xE000};  // MASSIVE boosts (up to ~8x per band)
+
+    // Apply each band filter to the input signal
+    for (int i = 0; i < 5; i++) {
+        arm_biquad_cascade_df1_q15(&eqBands[i], input, bandOutputs[i], blockSize);
+    }
+
+    // Combine outputs of all bands into the final signal
+    for (uint32_t n = 0; n < blockSize; n++) {
+        int32_t sum = 0;
+
+        // Apply gain to each band and sum
+        for (int b = 0; b < 5; b++) {
+            sum += ((int32_t)bandOutputs[b][n] * gains[b]) >> 15; // Apply gain to Q15 band outputs
+        }
+
+        // Saturate the summed value to prevent overflow
+        output[n] = (q15_t)__SSAT(sum, 16); // Clipping to Q15 range
+    }
+}
+
+
 
 
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc1) {
 	fx_ready = 1;
-//	last_dma_systick = __HAL_TIM_GET_COUNTER(&htim2);
+	if (call_uart_once = 1) {
+		flag_uart =  1;
+	}
+	call_uart_once = 0;
 }
 
 void HAL_I2S_TxCpltCallback(I2S_HandleTypeDef *hi2s) {
     if (hi2s->Instance == SPI3) {
+    }
+}
+
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
+    // Example: Check if buffer is full
+    if (fx_ready) {
+        buffer_overrun_count++;
     }
 }
 
