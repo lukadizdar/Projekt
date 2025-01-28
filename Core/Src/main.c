@@ -36,6 +36,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+q15_t soft_clip(q15_t sample);
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -45,9 +46,9 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define BUFFER_SIZE 512
-#define NUM_TAPS 512 //ZA FILTER KOLIKO JE IDEALAN
-#define SAMPLE_FREQ 43478
+#define ADC_SIZE 1024
+#define NUM_TAPS 64 //ZA FILTER KOLIKO JE IDEALAN
+#define SAMPLE_FREQ 45455
 #define BLOCK_SIZE 64 //
 #define ECHO_DELAY 512 // Delay in samples
 #define ECHO_STRENGTH 0.7f // Echo strength (0.0 to 1.0)
@@ -68,88 +69,100 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-//uint16_t fake_signal[BUFFER_SIZE]; // Buffer za dummy signal
-uint16_t adc_signal[BUFFER_SIZE];
-q15_t output_signal[BUFFER_SIZE];
-q15_t fake_signal[BUFFER_SIZE];
+
+//Signals
+uint16_t adc_signal[ADC_SIZE];
+q15_t conv_signal[ADC_SIZE/2];
+q15_t output_signal[ADC_SIZE/2];
+q15_t filtered_signal[ADC_SIZE/2];
+q15_t eq_signal[ADC_SIZE/2];
+q15_t finish_signal[ADC_SIZE/2];
+q15_t i2s_signal[ADC_SIZE*2];
+q15_t dummy[ADC_SIZE/2];
+q15_t dummy_out[ADC_SIZE/2];
+
+
+//FFT signals
+q15_t fftOutput[FFT_SIZE];
+q15_t magnitudeSpectrum[FFT_SIZE/2];
+q15_t peakVal = 0;
+uint16_t peakHz;
+
+
+//Flags
 volatile uint8_t fx_ready = 0;
-uint32_t last_systick = 0;
-q15_t conv_signal[BUFFER_SIZE];
-q15_t filtered_signal[BUFFER_SIZE];
-q15_t i2s_signal[BUFFER_SIZE*2];
-//q15_t output_signal[BUFFER_SIZE];
-//q15_t output_signal[BUFFER_SIZE];
-//256 bitna verzija
-//float32_t firCoeffs[NUM_TAPS] = {
-//    0.0001, 0.0000, -0.0000, -0.0000, -0.0000, 0.0001, 0.0002, 0.0003, 0.0004, 0.0005, 0.0005, 0.0004, 0.0003, 0.0002, 0.0001, 0.0000, 0.0000,
-//    0.0001, 0.0002, 0.0004, 0.0006, 0.0008, 0.0009, 0.0009, 0.0007, 0.0005, 0.0003, 0.0001, -0.0000, -0.0000, 0.0001, 0.0004, 0.0007, 0.0011,
-//    0.0014, 0.0015, 0.0014, 0.0011, 0.0006, 0.0002, -0.0002, -0.0005, -0.0004, -0.0002, 0.0003, 0.0009, 0.0015, 0.0018, 0.0019, 0.0016, 0.0009,
-//    0.0001, -0.0007, -0.0014, -0.0018, -0.0017, -0.0012, -0.0004, 0.0006, 0.0014, 0.0018, 0.0017, 0.0010, -0.0002, -0.0016, -0.0030, -0.0041, -0.0045,
-//    -0.0042, -0.0033, -0.0020, -0.0005, 0.0006, 0.0011, 0.0007, -0.0006, -0.0026, -0.0049, -0.0070, -0.0085, -0.0089, -0.0083, -0.0066, -0.0043, -0.0021,
-//    -0.0004, 0.0002, -0.0007, -0.0030, -0.0062, -0.0098, -0.0129, -0.0148, -0.0151, -0.0135, -0.0105, -0.0066, -0.0028, -0.0002, 0.0005, -0.0012, -0.0051,
-//    -0.0106, -0.0164, -0.0213, -0.0240, -0.0237, -0.0202, -0.0140, -0.0064, 0.0008, 0.0058, 0.0069, 0.0034, -0.0048, -0.0163, -0.0290, -0.0400, -0.0462,
-//    -0.0452, -0.0352, -0.0161, 0.0109, 0.0428, 0.0759, 0.1059, 0.1286, 0.1408, 0.1408, 0.1286, 0.1059, 0.0759, 0.0428, 0.0109, -0.0161, -0.0352,
-//    -0.0452, -0.0462, -0.0400, -0.0290, -0.0163, -0.0048, 0.0034, 0.0069, 0.0058, 0.0008, -0.0064, -0.0140, -0.0202, -0.0237, -0.0240, -0.0213, -0.0164,
-//    -0.0106, -0.0051, -0.0012, 0.0005, -0.0002, -0.0028, -0.0066, -0.0105, -0.0135, -0.0151, -0.0148, -0.0129, -0.0098, -0.0062, -0.0030, -0.0007, 0.0002,
-//    -0.0004, -0.0021, -0.0043, -0.0066, -0.0083, -0.0089, -0.0085, -0.0070, -0.0049, -0.0026, -0.0006, 0.0007, 0.0011, 0.0006, -0.0005, -0.0020, -0.0033,
-//    -0.0042, -0.0045, -0.0041, -0.0030, -0.0016, -0.0002, 0.0010, 0.0017, 0.0018, 0.0014, 0.0006, -0.0004, -0.0012, -0.0017, -0.0018, -0.0014, -0.0007,
-//    0.0001, 0.0009, 0.0016, 0.0019, 0.0018, 0.0015, 0.0009, 0.0003, -0.0002, -0.0004, -0.0005, -0.0002, 0.0002, 0.0006, 0.0011, 0.0014, 0.0015,
-//    0.0014, 0.0011, 0.0007, 0.0004, 0.0001, -0.0000, -0.0000, 0.0001, 0.0003, 0.0005, 0.0007, 0.0009, 0.0009, 0.0008, 0.0006, 0.0004, 0.0002,
-//    0.0001, 0.0000, 0.0000, 0.0001, 0.0002, 0.0003, 0.0004, 0.0005, 0.0005, 0.0004, 0.0003, 0.0002, 0.0001, -0.0000, -0.0000, -0.0000, 0.0000,
-//    0.0001
-//};
-float32_t firCoeffs[NUM_TAPS] = {
-    0.0001, 0.0000, 0.0000, -0.0000, 0.0000, 0.0000, 0.0001, 0.0001, 0.0002, 0.0002, 0.0002, 0.0002, 0.0001, 0.0001, 0.0000, -0.0000, -0.0000,
-    -0.0000, 0.0000, 0.0001, 0.0002, 0.0002, 0.0002, 0.0002, 0.0002, 0.0001, 0.0000, -0.0000, -0.0001, -0.0001, -0.0001, -0.0000, 0.0001, 0.0001,
-    0.0002, 0.0002, 0.0002, 0.0001, 0.0000, -0.0001, -0.0002, -0.0002, -0.0002, -0.0002, -0.0001, -0.0000, 0.0001, 0.0001, 0.0001, 0.0001, -0.0000,
-    -0.0002, -0.0003, -0.0004, -0.0005, -0.0005, -0.0004, -0.0003, -0.0001, -0.0000, 0.0001, 0.0000, -0.0000, -0.0002, -0.0004, -0.0006, -0.0007, -0.0007,
-    -0.0007, -0.0006, -0.0004, -0.0002, -0.0001, -0.0000, -0.0000, -0.0002, -0.0004, -0.0006, -0.0008, -0.0010, -0.0010, -0.0009, -0.0007, -0.0005, -0.0002,
-    -0.0000, 0.0001, 0.0000, -0.0002, -0.0004, -0.0007, -0.0010, -0.0011, -0.0011, -0.0010, -0.0007, -0.0003, 0.0000, 0.0003, 0.0004, 0.0003, 0.0001,
-    -0.0003, -0.0006, -0.0009, -0.0011, -0.0010, -0.0007, -0.0003, 0.0002, 0.0006, 0.0010, 0.0010, 0.0009, 0.0006, 0.0001, -0.0003, -0.0007, -0.0008,
-    -0.0006, -0.0002, 0.0004, 0.0010, 0.0016, 0.0019, 0.0020, 0.0017, 0.0013, 0.0007, 0.0001, -0.0002, -0.0003, -0.0001, 0.0005, 0.0013, 0.0021,
-    0.0027, 0.0030, 0.0030, 0.0026, 0.0019, 0.0012, 0.0005, 0.0001, 0.0000, 0.0004, 0.0011, 0.0021, 0.0030, 0.0037, 0.0040, 0.0038, 0.0032,
-    0.0022, 0.0012, 0.0004, -0.0001, -0.0001, 0.0004, 0.0014, 0.0025, 0.0035, 0.0043, 0.0044, 0.0040, 0.0031, 0.0018, 0.0004, -0.0006, -0.0012,
-    -0.0011, -0.0004, 0.0008, 0.0022, 0.0034, 0.0041, 0.0041, 0.0033, 0.0019, 0.0002, -0.0015, -0.0028, -0.0034, -0.0032, -0.0022, -0.0006, 0.0010,
-    0.0024, 0.0031, 0.0028, 0.0017, -0.0003, -0.0026, -0.0047, -0.0063, -0.0069, -0.0064, -0.0049, -0.0029, -0.0007, 0.0009, 0.0016, 0.0010, -0.0008,
-    -0.0035, -0.0065, -0.0092, -0.0110, -0.0115, -0.0105, -0.0083, -0.0054, -0.0025, -0.0005, 0.0002, -0.0009, -0.0035, -0.0073, -0.0114, -0.0149, -0.0171,
-    -0.0172, -0.0153, -0.0118, -0.0073, -0.0031, -0.0002, 0.0005, -0.0013, -0.0056, -0.0114, -0.0175, -0.0227, -0.0254, -0.0250, -0.0211, -0.0146, -0.0066,
-    0.0009, 0.0060, 0.0071, 0.0034, -0.0049, -0.0166, -0.0295, -0.0405, -0.0468, -0.0456, -0.0355, -0.0162, 0.0109, 0.0430, 0.0762, 0.1062, 0.1289,
-    0.1412, 0.1412, 0.1289, 0.1062, 0.0762, 0.0430, 0.0109, -0.0162, -0.0355, -0.0456, -0.0468, -0.0405, -0.0295, -0.0166, -0.0049, 0.0034, 0.0071,
-    0.0060, 0.0009, -0.0066, -0.0146, -0.0211, -0.0250, -0.0254, -0.0227, -0.0175, -0.0114, -0.0056, -0.0013, 0.0005, -0.0002, -0.0031, -0.0073, -0.0118,
-    -0.0153, -0.0172, -0.0171, -0.0149, -0.0114, -0.0073, -0.0035, -0.0009, 0.0002, -0.0005, -0.0025, -0.0054, -0.0083, -0.0105, -0.0115, -0.0110, -0.0092,
-    -0.0065, -0.0035, -0.0008, 0.0010, 0.0016, 0.0009, -0.0007, -0.0029, -0.0049, -0.0064, -0.0069, -0.0063, -0.0047, -0.0026, -0.0003, 0.0017, 0.0028,
-    0.0031, 0.0024, 0.0010, -0.0006, -0.0022, -0.0032, -0.0034, -0.0028, -0.0015, 0.0002, 0.0019, 0.0033, 0.0041, 0.0041, 0.0034, 0.0022, 0.0008,
-    -0.0004, -0.0011, -0.0012, -0.0006, 0.0004, 0.0018, 0.0031, 0.0040, 0.0044, 0.0043, 0.0035, 0.0025, 0.0014, 0.0004, -0.0001, -0.0001, 0.0004,
-    0.0012, 0.0022, 0.0032, 0.0038, 0.0040, 0.0037, 0.0030, 0.0021, 0.0011, 0.0004, 0.0000, 0.0001, 0.0005, 0.0012, 0.0019, 0.0026, 0.0030,
-    0.0030, 0.0027, 0.0021, 0.0013, 0.0005, -0.0001, -0.0003, -0.0002, 0.0001, 0.0007, 0.0013, 0.0017, 0.0020, 0.0019, 0.0016, 0.0010, 0.0004,
-    -0.0002, -0.0006, -0.0008, -0.0007, -0.0003, 0.0001, 0.0006, 0.0009, 0.0010, 0.0010, 0.0006, 0.0002, -0.0003, -0.0007, -0.0010, -0.0011, -0.0009,
-    -0.0006, -0.0003, 0.0001, 0.0003, 0.0004, 0.0003, 0.0000, -0.0003, -0.0007, -0.0010, -0.0011, -0.0011, -0.0010, -0.0007, -0.0004, -0.0002, 0.0000,
-    0.0001, -0.0000, -0.0002, -0.0005, -0.0007, -0.0009, -0.0010, -0.0010, -0.0008, -0.0006, -0.0004, -0.0002, -0.0000, -0.0000, -0.0001, -0.0002, -0.0004,
-    -0.0006, -0.0007, -0.0007, -0.0007, -0.0006, -0.0004, -0.0002, -0.0000, 0.0000, 0.0001, -0.0000, -0.0001, -0.0003, -0.0004, -0.0005, -0.0005, -0.0004,
-    -0.0003, -0.0002, -0.0000, 0.0001, 0.0001, 0.0001, 0.0001, -0.0000, -0.0001, -0.0002, -0.0002, -0.0002, -0.0002, -0.0001, 0.0000, 0.0001, 0.0002,
-    0.0002, 0.0002, 0.0001, 0.0001, -0.0000, -0.0001, -0.0001, -0.0001, -0.0000, 0.0000, 0.0001, 0.0002, 0.0002, 0.0002, 0.0002, 0.0002, 0.0001,
-    0.0000, -0.0000, -0.0000, -0.0000, 0.0000, 0.0001, 0.0001, 0.0002, 0.0002, 0.0002, 0.0002, 0.0001, 0.0001, 0.0000, 0.0000, -0.0000, 0.0000,
-    0.0000, 0.0001
-};
-q15_t firCoeffsQ15[NUM_TAPS];
-q15_t firStateQ15[NUM_TAPS + BLOCK_SIZE - 1]; // FIR state buffer
-
-arm_fir_instance_q15 S;
-//IIR
-//q15_t band1_coeffs[5] = {8, 0, -16, 0, 8};       // Band 1 ZA 80-8000
-//q15_t band2_coeffs[5] = {76, 0, -152, 0, 76};    // Band 2
-//q15_t band3_coeffs[5] = {551, 0, -1102, 0, 551}; // Band 3
-//q15_t band4_coeffs[5] = {1140, 0, -2280, 0, 1140}; // Band 4
-//q15_t band5_coeffs[5] = {3672, 0, -7344, 0, 3672}; // Band 5
-
-q15_t band1_coeffs[5] = {7, 0, -13, 0, 7};       // Narrower Band 1
-q15_t band2_coeffs[5] = {26, 0, -51, 0, 26};     // Narrower Band 2
-q15_t band3_coeffs[5] = {98, 0, -197, 0, 98};    // Narrower Band 3
-q15_t band4_coeffs[5] = {213, 0, -426, 0, 213};  // Narrower Band 4
-q15_t band5_coeffs[5] = {56, 0, -113, 0, 56};
-volatile uint32_t buffer_overrun_count = 0;
+volatile uint8_t adc_half_flag = 0;
+volatile uint8_t adc_done_flag = 0;
+volatile uint8_t conv_flag = 0;
+volatile uint8_t i2s_send_flag = 0;
 volatile uint8_t flag_uart = 0;
 volatile uint8_t call_uart_once = 1;
+volatile uint8_t q15_conv_flag = 0;
+volatile uint32_t last_systick = 0;
+
+//FFT
+arm_rfft_instance_q15 rfftInstance;
+
+
+//256 tapni FIR LOWPASS
+arm_fir_instance_q15 S;
+q15_t firCoeffsQ15[NUM_TAPS];
+q15_t firStateQ15[NUM_TAPS + BLOCK_SIZE - 1]; // FIR state buffer
+//float firCoeffs[NUM_TAPS] = {
+//    -0.0000, -0.0001, -0.0002, -0.0002, -0.0002, -0.0001, -0.0000, 0.0001, 0.0002, 0.0002, 0.0002, 0.0002, 0.0001, -0.0001, -0.0002, -0.0003,
+//    -0.0003, -0.0003, -0.0001, 0.0000, 0.0002, 0.0004, 0.0004, 0.0004, 0.0003, 0.0000, -0.0002, -0.0004, -0.0006, -0.0006, -0.0005, -0.0002,
+//    0.0001, 0.0005, 0.0007, 0.0008, 0.0007, 0.0004, -0.0000, -0.0005, -0.0009, -0.0011, -0.0010, -0.0007, -0.0002, 0.0004, 0.0010, 0.0014,
+//    0.0014, 0.0012, 0.0006, -0.0002, -0.0010, -0.0016, -0.0019, -0.0017, -0.0011, -0.0002, 0.0009, 0.0018, 0.0023, 0.0023, 0.0018, 0.0007,
+//    -0.0006, -0.0018, -0.0027, -0.0030, -0.0026, -0.0015, 0.0001, 0.0017, 0.0031, 0.0038, 0.0036, 0.0025, 0.0007, -0.0014, -0.0033, -0.0045,
+//    -0.0047, -0.0038, -0.0019, 0.0007, 0.0032, 0.0052, 0.0060, 0.0054, 0.0034, 0.0004, -0.0029, -0.0057, -0.0074, -0.0074, -0.0055, -0.0022,
+//    0.0020, 0.0060, 0.0089, 0.0099, 0.0084, 0.0048, -0.0004, -0.0060, -0.0107, -0.0132, -0.0126, -0.0088, -0.0024, 0.0054, 0.0128, 0.0180,
+//    0.0193, 0.0159, 0.0079, -0.0035, -0.0161, -0.0269, -0.0331, -0.0319, -0.0218, -0.0025, 0.0245, 0.0566, 0.0899, 0.1199, 0.1427, 0.1550,
+//    0.1550, 0.1427, 0.1199, 0.0899, 0.0566, 0.0245, -0.0025, -0.0218, -0.0319, -0.0331, -0.0269, -0.0161, -0.0035, 0.0079, 0.0159, 0.0193,
+//    0.0180, 0.0128, 0.0054, -0.0024, -0.0088, -0.0126, -0.0132, -0.0107, -0.0060, -0.0004, 0.0048, 0.0084, 0.0099, 0.0089, 0.0060, 0.0020,
+//    -0.0022, -0.0055, -0.0074, -0.0074, -0.0057, -0.0029, 0.0004, 0.0034, 0.0054, 0.0060, 0.0052, 0.0032, 0.0007, -0.0019, -0.0038, -0.0047,
+//    -0.0045, -0.0033, -0.0014, 0.0007, 0.0025, 0.0036, 0.0038, 0.0031, 0.0017, 0.0001, -0.0015, -0.0026, -0.0030, -0.0027, -0.0018, -0.0006,
+//    0.0007, 0.0018, 0.0023, 0.0023, 0.0018, 0.0009, -0.0002, -0.0011, -0.0017, -0.0019, -0.0016, -0.0010, -0.0002, 0.0006, 0.0012, 0.0014,
+//    0.0014, 0.0010, 0.0004, -0.0002, -0.0007, -0.0010, -0.0011, -0.0009, -0.0005, -0.0000, 0.0004, 0.0007, 0.0008, 0.0007, 0.0005, 0.0001,
+//    -0.0002, -0.0005, -0.0006, -0.0006, -0.0004, -0.0002, 0.0000, 0.0003, 0.0004, 0.0004, 0.0004, 0.0002, 0.0000, -0.0001, -0.0003, -0.0003,
+//    -0.0003, -0.0002, -0.0001, 0.0001, 0.0002, 0.0002, 0.0002, 0.0002, 0.0001, -0.0000, -0.0001, -0.0002, -0.0002, -0.0002, -0.0001, -0.0000
+//};
+float firCoeffs[NUM_TAPS] = {
+    0.0002, 0.0006, 0.0009, 0.0011, 0.0011, 0.0007, -0.0001, -0.0012, -0.0025, -0.0036, -0.0039, -0.0031, -0.0009, 0.0023, 0.0061, 0.0094, 0.0110,
+    0.0097, 0.0052, -0.0025, -0.0119, -0.0210, -0.0270, -0.0271, -0.0192, -0.0023, 0.0229, 0.0540, 0.0872, 0.1179, 0.1415, 0.1544, 0.1544, 0.1415,
+    0.1179, 0.0872, 0.0540, 0.0229, -0.0023, -0.0192, -0.0271, -0.0270, -0.0210, -0.0119, -0.0025, 0.0052, 0.0097, 0.0110, 0.0094, 0.0061, 0.0023,
+    -0.0009, -0.0031, -0.0039, -0.0036, -0.0025, -0.0012, -0.0001, 0.0007, 0.0011, 0.0011, 0.0009, 0.0006, 0.0002
+};
+
+
+
+//IIR HIGHPASS
+float32_t highPassCoeffs[5] = {0.500037, -1.0, 0.500037, 0.999892, -0.492886};
+q15_t highPassState[4] = {0};
+arm_biquad_casd_df1_inst_q15 highPassFilter;
+q15_t highPassCoeffsQ15[5];
+float32_t hann_window[ADC_SIZE/2];
+
+float32_t lowPassCoeffs[5] = {0.044927, 0.089853, 0.044927, 1.000000, -0.408279};
+q15_t lowPassState[4] = {0};
+arm_biquad_casd_df1_inst_q15 lowPassFilter;
+q15_t lowPassCoeffsQ15[5];
+
+
+//IIR
+
+
+float32_t band1_coeffs[5] = {0.000039, 0.000000, -0.000077, 0.673938, -1.000000};
+float32_t band2_coeffs[5] = {0.000200, 0.000000, -0.000400, 0.683758, -1.000000};
+float32_t band3_coeffs[5] = {0.001178, 0.000000, -0.002356, 0.711083, -1.000000};
+float32_t band4_coeffs[5] = {0.003599, 0.000000, -0.007199, 0.755061, -1.000000};
+float32_t band5_coeffs[5] = {0.010781, 0.000000, -0.021561, 0.828920, -1.000000};
+
+
+q15_t band1_coeffs_q15[5];
+q15_t band2_coeffs_q15[5];
+q15_t band3_coeffs_q15[5];
+q15_t band4_coeffs_q15[5];
+q15_t band5_coeffs_q15[5];
 
 q15_t band1_state[4] = {0};
 q15_t band2_state[4] = {0};
@@ -205,22 +218,25 @@ int main(void)
   MX_I2C1_Init();
   MX_I2S3_Init();
   MX_SPI1_Init();
-  MX_USB_HOST_Init();
+//  MX_USB_HOST_Init();
   MX_TIM2_Init();
   MX_ADC1_Init();
   MX_USART2_UART_Init();
-  /* USER CODE BEGIN 2 */
-  q15_t test = -2022;   // Skaliraj 2022 na Q15 format
-  float izbor = 0.1;
-  q15_t multiplier = (q15_t)(0x7FFF * izbor);         // Q15 format za 1.0
-  q15_t rezultat = 0;
-  arm_mult_q15(&test, &multiplier, &rezultat, 1);
 
+  /* USER CODE BEGIN 2 */
+// TESTING ZONE
+
+//  q15_t test = -2022;   // Skaliraj 2022 na Q15 format
+//  float izbor = 0.1;
+//  q15_t multiplier = (q15_t)(0x7FFF * izbor);         // Q15 format za 1.0
+//  q15_t rezultat = 0;
+//  arm_mult_q15(&test, &multiplier, &rezultat, 1);
+  arm_rfft_init_q15(&rfftInstance, FFT_SIZE, 0, 1);
   configAudio();
-  init_fir_filter();
+
 
   HAL_TIM_Base_Start(&htim2);
-  HAL_ADC_Start_DMA(&hadc1, adc_signal, BUFFER_SIZE);
+  HAL_ADC_Start_DMA(&hadc1, adc_signal, ADC_SIZE);
 
 
   /* USER CODE END 2 */
@@ -230,47 +246,69 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
-    MX_USB_HOST_Process();
 
     /* USER CODE BEGIN 3 */
-    if (fx_ready == 1) {
-		fx_ready = 0;
-		 convert_to_q15(adc_signal, conv_signal, BUFFER_SIZE);
+	  arm_rfft_init_q15(&rfftInstance, FFT_SIZE, 0, 1);
+//	  init_iir_filter();
+	  if (adc_half_flag == 1) {
+    	adc_half_flag = 0;
+    	conv_flag = 0;
+    	last_systick = HAL_GetTick();
 
-        last_systick = HAL_GetTick();
-//		echo_effect(conv_signal, output_signal, BUFFER_SIZE, 0.5, 0.5);
-//		echo_effect_q15(conv_signal, output_signal, BUFFER_SIZE);
-//		tremolo_effect(conv_signal, output_signal, BUFFER_SIZE, 440);
-//		smooth_signal_q15(conv_signal, output_signal, BUFFER_SIZE, 5);
-//		last_systick = HAL_GetTick();
+    	init_iir_filter();
+    	init_fir_filter();
+    	convert_to_q15(adc_signal, conv_signal, ADC_SIZE);
 
-		last_systick = HAL_GetTick();
-//		amplify_signal_q15(conv_signal, gained_signal, BUFFER_SIZE, 1.0f);
-		last_systick = HAL_GetTick();
+		fir_filter(conv_signal, filtered_signal, ADC_SIZE/2, BLOCK_SIZE);
 
-		fir_filter(conv_signal, filtered_signal);
-//		amplify_q15_cmsis(filtered_signal, output_signal, BUFFER_SIZE, 0.1f);
-		convert_to_i2s(filtered_signal, i2s_signal, BUFFER_SIZE);
-		if (flag_uart) callUart(i2s_signal);
+    	iir_filter(filtered_signal, output_signal, ADC_SIZE/2);
+
+
+//		iir_filter_lowpass(filtered_signal, output_signal, ADC_SIZE/2);
+
+		process_equalizer(output_signal, eq_signal, ADC_SIZE/2);
+
+    	last_systick = HAL_GetTick();
+//		rfft(finish_signal, fftOutput, magnitudeSpectrum);
+    	last_systick = HAL_GetTick();
+    	last_systick = HAL_GetTick();
+//		peak_values_fft(magnitudeSpectrum); // Look for unexpected peaks
+
+
+		i2s_send_flag = 0; //DA KRENE PRVU POLOVICU
+
+		convert_to_i2s(eq_signal, i2s_signal, ADC_SIZE);
+
+    }
+
+    if (adc_done_flag == 1) {
+    	adc_done_flag = 0;
+    	conv_flag = 1;
+    	init_iir_filter();
+    	init_fir_filter();
+    	convert_to_q15(adc_signal, conv_signal, ADC_SIZE);
+    	fir_filter(conv_signal, filtered_signal, ADC_SIZE/2, BLOCK_SIZE);
+    	iir_filter(filtered_signal, output_signal, ADC_SIZE/2);
+
+
+//		iir_filter_lowpass(filtered_signal, output_signal, ADC_SIZE/2);
+//		fir_filter(filtered_signal, output_signal, ADC_SIZE/2, BLOCK_SIZE);
+
+		process_equalizer(output_signal, eq_signal, ADC_SIZE/2);
+
+		i2s_send_flag = 1; //DA KRENE DRUGU POLOVICU
+		convert_to_i2s(eq_signal, i2s_signal, ADC_SIZE);
+		if (flag_uart == 1) {
+			callUart(i2s_signal);
+		}
 		flag_uart = 0;
-//		process_equalizer(filtered_signal, output_signal, BUFFER_SIZE);
-//		amplify_signal_q15(filtered_signal, output_signal, BUFFER_SIZE, 1.4f);
 
-//		tremolo_effect(filtered_signal, output_signal, BUFFER_SIZE, 440);
-//		echo_effect(filtered_signal, output_signal, BUFFER_SIZE, 0.5, 0.5);
+    }
 
-
-		last_systick = HAL_GetTick();
-
-
-
-
-        last_systick = HAL_GetTick();
-
+//		process_equalizer(filtered_signal, output_signal, ADC_SIZE);
 	}
-	}
-  /* USER CODE END 3 */
 }
+  /* USER CODE END 3 */
 
 /**
   * @brief System Clock Configuration
@@ -321,7 +359,7 @@ void SystemClock_Config(void)
 
 //ECHO EFEKT
 void echo_effect(uint16_t *buffer, uint16_t *outputBuffer, int size, float echo_strength, int delay) {
-    static uint16_t echo_buffer[BUFFER_SIZE * 2] = {0}; // Povećan buffer za "delay"
+    static uint16_t echo_buffer[ADC_SIZE * 2] = {0}; // Povećan buffer za "delay"
     for (int i = 0; i < size; i++) {
         int delayed_index = i - delay;
         if (delayed_index >= 0) {
@@ -379,99 +417,144 @@ void amplify_q15_cmsis(const q15_t *input_signal, q15_t *output_signal, size_t l
 }
 
 
-//FIR FILTER
 void convert_to_q15(uint16_t *rawInput, q15_t *convertedSignal, int size) {
-    int i = 0;
-        // Map uint16_t (0 to 65535) to q15_t (-32768 to 32767)
-//        convertedSignal[i] = (q15_t)((int32_t)(rawInput[i] - 32768));
-        for (i = 0; i < size; i++) {
-        	convertedSignal[i] = (q15_t)((int32_t)(rawInput[i]));
-        }
-//    	convertedSignal[i] = (q15_t)((int32_t)(rawInput[i]));
-//    	convertedSignal[i] = (q15_t)((rawInput[i] * 32767) / 4096);
-//    	for (int j = 0; j < size*2; j += 2) {
-//    		convertedSignal[j] = (q15_t)(rawInput[i]);
-//    		convertedSignal[j+1] = (q15_t)(rawInput[i]);
-//    		i++;
-//    	}
+    int i;
+    if (conv_flag == 0) {
+        for (i = 0; i < size / 2; i++) {
+            // Convert and saturate to Q15
 
+            convertedSignal[i] = (q15_t)__SSAT(((rawInput[i] - 2048) * 8), 16);
+            if (convertedSignal[i] > 7800*2) convertedSignal[i] = 7800*2;
+            if (convertedSignal[i] < -7800*2) convertedSignal[i] = -7800*2;
+        }
+    }
+    if (conv_flag == 1) {
+        for (i = size / 2; i < size; i++) {
+            // Convert and saturate to Q15
+
+            convertedSignal[i] = (q15_t)__SSAT(((rawInput[i] - 2048) * 8), 16);
+            if (convertedSignal[i] > 7000*2) convertedSignal[i] = 7000*2;
+            if (convertedSignal[i] < -7000*2) convertedSignal[i] = -7000*2;
+        }
+    }
 }
+
 
 void convert_to_i2s(q15_t *rawInput, q15_t *convertedSignal, int size) {
     int i = 0;
-    	for (int j = 0; j < size*2; j += 2) {
-    		convertedSignal[j] = (q15_t)(rawInput[i]);
-    		convertedSignal[j+1] = (q15_t)(rawInput[i]);
-    		i++;
+    	if (i2s_send_flag == 0) {
+        	for (int j = 0; j < size; j += 2) {
+        		convertedSignal[j] = (q15_t)(rawInput[i]);
+        		convertedSignal[j+1] = (q15_t)(rawInput[i]);
+        		i++;
+        	}
+    	}
+
+    	if (i2s_send_flag == 1) {
+        	for (int j = size; j < size*2; j += 2) {
+        		convertedSignal[j] = (q15_t)(rawInput[i]);
+        		convertedSignal[j+1] = (q15_t)(rawInput[i]);
+        		i++;
+        	}
     	}
 }
 
 
 
-void callUart(uint16_t* input) {
+void callUart(q15_t *input) {
 	  HAL_UART_Transmit_DMA(&huart2, (uint8_t *)input, sizeof(input));
-	  HAL_I2S_Transmit_DMA(&hi2s3, input, BUFFER_SIZE);
+	  HAL_I2S_Transmit_DMA(&hi2s3, input, ADC_SIZE*2);
 }
 
-
-
-
-void init_fir_filter(void) {
-    arm_float_to_q15(firCoeffs, firCoeffsQ15, NUM_TAPS);
+void init_fir_filter() {
+	arm_float_to_q15(firCoeffs, firCoeffsQ15, NUM_TAPS);
+    memset(firStateQ15, 0, sizeof(firStateQ15));
     arm_fir_init_q15(&S, NUM_TAPS, firCoeffsQ15, firStateQ15, BLOCK_SIZE);
 }
-void fir_filter(q15_t *input, q15_t *output) {
-    for (int i = 0; i < BUFFER_SIZE; i += BLOCK_SIZE) {
-        arm_fir_q15(&S, &input[i], &output[i], BLOCK_SIZE);
+
+void fir_filter(q15_t *input, q15_t *output, uint16_t length, uint16_t block_size) {
+    for (int i = 0; i < length; i += block_size) {
+        arm_fir_q15(&S, &input[i], &output[i], block_size);
     }
 }
-void rfft(q15_t *inputSignal, q15_t *fftOutput, q15_t *magnitudeSpectrum) {
-    arm_rfft_instance_q15 rfftInstance;
 
-    arm_rfft_init_q15(&rfftInstance, FFT_SIZE, 0, 1);
 
-    arm_rfft_q15(&rfftInstance, inputSignal, fftOutput); //rfft buffer izgleda jako cudno tho, DC, Nyquist, real1, imag1,
+void init_iir_filter() {
+	arm_float_to_q15(highPassCoeffs, highPassCoeffsQ15, 5);
+	arm_biquad_cascade_df1_init_q15(&highPassFilter, 1, highPassCoeffsQ15, highPassState, 0);
+	arm_float_to_q15(lowPassCoeffs, lowPassCoeffsQ15, 5);
+	arm_biquad_cascade_df1_init_q15(&lowPassFilter, 1, lowPassCoeffsQ15, lowPassState, 0);
+}
 
-    arm_cmplx_mag_q15(fftOutput, magnitudeSpectrum, FFT_SIZE / 2); //ovo je za magnitudes, mora biti /2 jer je simetrično, nyquistov dijagram iz automatskog samo poz frekv
+void iir_filter(q15_t *input, q15_t *output, uint32_t blockSize) {
+	arm_biquad_cascade_df1_q15(&highPassFilter, input, output, blockSize);
+}
+void iir_filter_lowpass(q15_t *input, q15_t *output, uint32_t blockSize) {
+	arm_biquad_cascade_df1_q15(&lowPassFilter, input, output, blockSize);
 }
 
 
-void init_filters() {
+void rfft(q15_t *inputSignal, q15_t *fftOutput, q15_t *magnitudeSpectrum) {
+    arm_rfft_q15(&rfftInstance, inputSignal, fftOutput); //rfft buffer izgleda jako cudno tho, DC, Nyquist, real1, imag1,
+    arm_cmplx_mag_q15(fftOutput, magnitudeSpectrum, FFT_SIZE / 2); //ovo je za magnitudes, mora biti /2 jer je simetrično, nyquistov dijagram iz automatskog samo poz frekv
+}
+void peak_values_fft(q15_t *magnitudeSpectrum) {
+	for (int i = 0; i < FFT_SIZE/2; i++) {
+		if (magnitudeSpectrum[i] > peakVal) {
+			peakVal = magnitudeSpectrum[i];
+			peakHz = (uint16_t)(i * SAMPLE_FREQ / (float)FFT_SIZE);
+		}
+	}
+}
+
+
+
+void process_equalizer(q15_t *input, q15_t *output, uint32_t blockSize) {
+    q15_t bandOutputs[5][blockSize];   // Temporary storage for each band output
+    q15_t gainsQ15[5];
+    float32_t gains[5] = {0.2, 0.8, 1.0, 1.0, 0.4};
+
+    arm_float_to_q15(gains, gainsQ15, 5);
+
+    arm_float_to_q15(band1_coeffs, band1_coeffs_q15, 5);
+    arm_float_to_q15(band2_coeffs, band2_coeffs_q15, 5);
+    arm_float_to_q15(band3_coeffs, band3_coeffs_q15, 5);
+    arm_float_to_q15(band4_coeffs, band4_coeffs_q15, 5);
+    arm_float_to_q15(band5_coeffs, band5_coeffs_q15, 5);
+
     arm_biquad_cascade_df1_init_q15(&eqBands[0], 1, band1_coeffs, band1_state, 0);
     arm_biquad_cascade_df1_init_q15(&eqBands[1], 1, band2_coeffs, band2_state, 0);
     arm_biquad_cascade_df1_init_q15(&eqBands[2], 1, band3_coeffs, band3_state, 0);
     arm_biquad_cascade_df1_init_q15(&eqBands[3], 1, band4_coeffs, band4_state, 0);
     arm_biquad_cascade_df1_init_q15(&eqBands[4], 1, band5_coeffs, band5_state, 0);
-}
-void process_equalizer(q15_t *input, q15_t *output, uint32_t blockSize) {
-    q15_t bandOutputs[5][blockSize];   // Temporary storage for each band output
-    q15_t gains[5] = {0xF000, 0xF800, 0xF800, 0xF000, 0xE000};  // MASSIVE boosts (up to ~8x per band)
 
     // Apply each band filter to the input signal
     for (int i = 0; i < 5; i++) {
         arm_biquad_cascade_df1_q15(&eqBands[i], input, bandOutputs[i], blockSize);
     }
 
-    // Combine outputs of all bands into the final signal
     for (uint32_t n = 0; n < blockSize; n++) {
-        int32_t sum = 0;
+           int32_t sum = 0;
 
-        // Apply gain to each band and sum
-        for (int b = 0; b < 5; b++) {
-            sum += ((int32_t)bandOutputs[b][n] * gains[b]) >> 15; // Apply gain to Q15 band outputs
-        }
+           for (int b = 0; b < 5; b++) {
+               q15_t scaledSample;
+               arm_mult_q15(&bandOutputs[b][n], &gainsQ15[b], &scaledSample, 1); // Scale band output
+               sum += scaledSample; // Sum all bands
+           }
 
-        // Saturate the summed value to prevent overflow
-        output[n] = (q15_t)__SSAT(sum, 16); // Clipping to Q15 range
-    }
+           // Saturate to Q15 range
+           output[n] = (q15_t)__SSAT(sum, 16);
+       }
+}
+void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef *hadc1) {
+	adc_half_flag = 1;
 }
 
 
 
-
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc1) {
-	fx_ready = 1;
-	if (call_uart_once = 1) {
+	adc_done_flag = 1;
+	if (call_uart_once == 1) {
 		flag_uart =  1;
 	}
 	call_uart_once = 0;
@@ -481,14 +564,6 @@ void HAL_I2S_TxCpltCallback(I2S_HandleTypeDef *hi2s) {
     if (hi2s->Instance == SPI3) {
     }
 }
-
-void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
-    // Example: Check if buffer is full
-    if (fx_ready) {
-        buffer_overrun_count++;
-    }
-}
-
 
 
 
