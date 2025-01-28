@@ -125,7 +125,6 @@ void Error_Handler(void);
 #define MEMS_INT2_GPIO_Port GPIOE
 
 /* USER CODE BEGIN Private defines */
-void echo_effect(uint16_t *buffer, uint16_t *outputBuffer, int size, float echo_strength, int delay);
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

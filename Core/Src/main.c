@@ -36,7 +36,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
-q15_t soft_clip(q15_t sample);
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -47,12 +46,13 @@ q15_t soft_clip(q15_t sample);
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define ADC_SIZE 1024
-#define NUM_TAPS 64 //ZA FILTER KOLIKO JE IDEALAN
+#define NUM_TAPS 256 //ZA FILTER KOLIKO JE IDEALAN
 #define SAMPLE_FREQ 45455
 #define BLOCK_SIZE 64 //
 #define ECHO_DELAY 512 // Delay in samples
 #define ECHO_STRENGTH 0.7f // Echo strength (0.0 to 1.0)
 #define FFT_SIZE 512
+
 
 /* USER CODE END PD */
 
@@ -75,19 +75,17 @@ uint16_t adc_signal[ADC_SIZE];
 q15_t conv_signal[ADC_SIZE/2];
 q15_t output_signal[ADC_SIZE/2];
 q15_t filtered_signal[ADC_SIZE/2];
-q15_t eq_signal[ADC_SIZE/2];
-q15_t finish_signal[ADC_SIZE/2];
 q15_t i2s_signal[ADC_SIZE*2];
-q15_t dummy[ADC_SIZE/2];
-q15_t dummy_out[ADC_SIZE/2];
+uint8_t master_volume = 4;
 
 
 //FFT signals
-q15_t fftOutput[FFT_SIZE];
+q15_t fft_signal[ADC_SIZE/2];
+q15_t fftOutput[FFT_SIZE*2];
 q15_t magnitudeSpectrum[FFT_SIZE/2];
 q15_t peakVal = 0;
-uint16_t peakHz;
-
+uint16_t peakHz = 0;
+q15_t offset;
 
 //Flags
 volatile uint8_t fx_ready = 0;
@@ -101,75 +99,13 @@ volatile uint8_t q15_conv_flag = 0;
 volatile uint32_t last_systick = 0;
 
 //FFT
-arm_rfft_instance_q15 rfftInstance;
-
-
-//256 tapni FIR LOWPASS
-arm_fir_instance_q15 S;
-q15_t firCoeffsQ15[NUM_TAPS];
-q15_t firStateQ15[NUM_TAPS + BLOCK_SIZE - 1]; // FIR state buffer
-//float firCoeffs[NUM_TAPS] = {
-//    -0.0000, -0.0001, -0.0002, -0.0002, -0.0002, -0.0001, -0.0000, 0.0001, 0.0002, 0.0002, 0.0002, 0.0002, 0.0001, -0.0001, -0.0002, -0.0003,
-//    -0.0003, -0.0003, -0.0001, 0.0000, 0.0002, 0.0004, 0.0004, 0.0004, 0.0003, 0.0000, -0.0002, -0.0004, -0.0006, -0.0006, -0.0005, -0.0002,
-//    0.0001, 0.0005, 0.0007, 0.0008, 0.0007, 0.0004, -0.0000, -0.0005, -0.0009, -0.0011, -0.0010, -0.0007, -0.0002, 0.0004, 0.0010, 0.0014,
-//    0.0014, 0.0012, 0.0006, -0.0002, -0.0010, -0.0016, -0.0019, -0.0017, -0.0011, -0.0002, 0.0009, 0.0018, 0.0023, 0.0023, 0.0018, 0.0007,
-//    -0.0006, -0.0018, -0.0027, -0.0030, -0.0026, -0.0015, 0.0001, 0.0017, 0.0031, 0.0038, 0.0036, 0.0025, 0.0007, -0.0014, -0.0033, -0.0045,
-//    -0.0047, -0.0038, -0.0019, 0.0007, 0.0032, 0.0052, 0.0060, 0.0054, 0.0034, 0.0004, -0.0029, -0.0057, -0.0074, -0.0074, -0.0055, -0.0022,
-//    0.0020, 0.0060, 0.0089, 0.0099, 0.0084, 0.0048, -0.0004, -0.0060, -0.0107, -0.0132, -0.0126, -0.0088, -0.0024, 0.0054, 0.0128, 0.0180,
-//    0.0193, 0.0159, 0.0079, -0.0035, -0.0161, -0.0269, -0.0331, -0.0319, -0.0218, -0.0025, 0.0245, 0.0566, 0.0899, 0.1199, 0.1427, 0.1550,
-//    0.1550, 0.1427, 0.1199, 0.0899, 0.0566, 0.0245, -0.0025, -0.0218, -0.0319, -0.0331, -0.0269, -0.0161, -0.0035, 0.0079, 0.0159, 0.0193,
-//    0.0180, 0.0128, 0.0054, -0.0024, -0.0088, -0.0126, -0.0132, -0.0107, -0.0060, -0.0004, 0.0048, 0.0084, 0.0099, 0.0089, 0.0060, 0.0020,
-//    -0.0022, -0.0055, -0.0074, -0.0074, -0.0057, -0.0029, 0.0004, 0.0034, 0.0054, 0.0060, 0.0052, 0.0032, 0.0007, -0.0019, -0.0038, -0.0047,
-//    -0.0045, -0.0033, -0.0014, 0.0007, 0.0025, 0.0036, 0.0038, 0.0031, 0.0017, 0.0001, -0.0015, -0.0026, -0.0030, -0.0027, -0.0018, -0.0006,
-//    0.0007, 0.0018, 0.0023, 0.0023, 0.0018, 0.0009, -0.0002, -0.0011, -0.0017, -0.0019, -0.0016, -0.0010, -0.0002, 0.0006, 0.0012, 0.0014,
-//    0.0014, 0.0010, 0.0004, -0.0002, -0.0007, -0.0010, -0.0011, -0.0009, -0.0005, -0.0000, 0.0004, 0.0007, 0.0008, 0.0007, 0.0005, 0.0001,
-//    -0.0002, -0.0005, -0.0006, -0.0006, -0.0004, -0.0002, 0.0000, 0.0003, 0.0004, 0.0004, 0.0004, 0.0002, 0.0000, -0.0001, -0.0003, -0.0003,
-//    -0.0003, -0.0002, -0.0001, 0.0001, 0.0002, 0.0002, 0.0002, 0.0002, 0.0001, -0.0000, -0.0001, -0.0002, -0.0002, -0.0002, -0.0001, -0.0000
-//};
-float firCoeffs[NUM_TAPS] = {
-    0.0002, 0.0006, 0.0009, 0.0011, 0.0011, 0.0007, -0.0001, -0.0012, -0.0025, -0.0036, -0.0039, -0.0031, -0.0009, 0.0023, 0.0061, 0.0094, 0.0110,
-    0.0097, 0.0052, -0.0025, -0.0119, -0.0210, -0.0270, -0.0271, -0.0192, -0.0023, 0.0229, 0.0540, 0.0872, 0.1179, 0.1415, 0.1544, 0.1544, 0.1415,
-    0.1179, 0.0872, 0.0540, 0.0229, -0.0023, -0.0192, -0.0271, -0.0270, -0.0210, -0.0119, -0.0025, 0.0052, 0.0097, 0.0110, 0.0094, 0.0061, 0.0023,
-    -0.0009, -0.0031, -0.0039, -0.0036, -0.0025, -0.0012, -0.0001, 0.0007, 0.0011, 0.0011, 0.0009, 0.0006, 0.0002
-};
-
-
-
-//IIR HIGHPASS
-float32_t highPassCoeffs[5] = {0.500037, -1.0, 0.500037, 0.999892, -0.492886};
-q15_t highPassState[4] = {0};
-arm_biquad_casd_df1_inst_q15 highPassFilter;
-q15_t highPassCoeffsQ15[5];
-float32_t hann_window[ADC_SIZE/2];
-
-float32_t lowPassCoeffs[5] = {0.044927, 0.089853, 0.044927, 1.000000, -0.408279};
-q15_t lowPassState[4] = {0};
-arm_biquad_casd_df1_inst_q15 lowPassFilter;
-q15_t lowPassCoeffsQ15[5];
+arm_rfft_instance_q15 rfft_instance;
 
 
 //IIR
-
-
-float32_t band1_coeffs[5] = {0.000039, 0.000000, -0.000077, 0.673938, -1.000000};
-float32_t band2_coeffs[5] = {0.000200, 0.000000, -0.000400, 0.683758, -1.000000};
-float32_t band3_coeffs[5] = {0.001178, 0.000000, -0.002356, 0.711083, -1.000000};
-float32_t band4_coeffs[5] = {0.003599, 0.000000, -0.007199, 0.755061, -1.000000};
-float32_t band5_coeffs[5] = {0.010781, 0.000000, -0.021561, 0.828920, -1.000000};
-
-
-q15_t band1_coeffs_q15[5];
-q15_t band2_coeffs_q15[5];
-q15_t band3_coeffs_q15[5];
-q15_t band4_coeffs_q15[5];
-q15_t band5_coeffs_q15[5];
-
-q15_t band1_state[4] = {0};
-q15_t band2_state[4] = {0};
-q15_t band3_state[4] = {0};
-q15_t band4_state[4] = {0};
-q15_t band5_state[4] = {0};
-arm_biquad_casd_df1_inst_q15 eqBands[5];
+q15_t highPassCoeffsQ15[5] = {16384, -16384, 0, 16364, -16359};
+arm_biquad_casd_df1_inst_q15 highPassFilter;
+q15_t highPassState[2] = {0};
 
 
 /* USER CODE END PV */
@@ -224,20 +160,12 @@ int main(void)
   MX_USART2_UART_Init();
 
   /* USER CODE BEGIN 2 */
-// TESTING ZONE
-
-//  q15_t test = -2022;   // Skaliraj 2022 na Q15 format
-//  float izbor = 0.1;
-//  q15_t multiplier = (q15_t)(0x7FFF * izbor);         // Q15 format za 1.0
-//  q15_t rezultat = 0;
-//  arm_mult_q15(&test, &multiplier, &rezultat, 1);
-  arm_rfft_init_q15(&rfftInstance, FFT_SIZE, 0, 1);
   configAudio();
-
+  init_highpass_filter();
+  arm_rfft_init_q15(&rfft_instance, FFT_SIZE, 0, 1);
 
   HAL_TIM_Base_Start(&htim2);
   HAL_ADC_Start_DMA(&hadc1, adc_signal, ADC_SIZE);
-
 
   /* USER CODE END 2 */
 
@@ -248,56 +176,46 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  arm_rfft_init_q15(&rfftInstance, FFT_SIZE, 0, 1);
-//	  init_iir_filter();
 	  if (adc_half_flag == 1) {
     	adc_half_flag = 0;
     	conv_flag = 0;
     	last_systick = HAL_GetTick();
 
-    	init_iir_filter();
-    	init_fir_filter();
     	convert_to_q15(adc_signal, conv_signal, ADC_SIZE);
+    	center_signal(conv_signal, ADC_SIZE/2);
+    	apply_highpass_filter(conv_signal, filtered_signal, ADC_SIZE/2);
+    	center_signal(filtered_signal, ADC_SIZE/2);
 
-		fir_filter(conv_signal, filtered_signal, ADC_SIZE/2, BLOCK_SIZE);
-
-    	iir_filter(filtered_signal, output_signal, ADC_SIZE/2);
-
-
-//		iir_filter_lowpass(filtered_signal, output_signal, ADC_SIZE/2);
-
-		process_equalizer(output_signal, eq_signal, ADC_SIZE/2);
-
+    	memcpy(fft_signal, filtered_signal, FFT_SIZE*sizeof(q15_t));
+		rfft(fft_signal, fftOutput, magnitudeSpectrum);
     	last_systick = HAL_GetTick();
-//		rfft(finish_signal, fftOutput, magnitudeSpectrum);
-    	last_systick = HAL_GetTick();
-    	last_systick = HAL_GetTick();
-//		peak_values_fft(magnitudeSpectrum); // Look for unexpected peaks
+		peak_values_fft(magnitudeSpectrum);
+    	offset_signal(filtered_signal, output_signal, ADC_SIZE/2);
 
 
 		i2s_send_flag = 0; //DA KRENE PRVU POLOVICU
 
-		convert_to_i2s(eq_signal, i2s_signal, ADC_SIZE);
+		convert_to_i2s(output_signal, i2s_signal, ADC_SIZE);
 
     }
 
     if (adc_done_flag == 1) {
     	adc_done_flag = 0;
     	conv_flag = 1;
-    	init_iir_filter();
-    	init_fir_filter();
+
     	convert_to_q15(adc_signal, conv_signal, ADC_SIZE);
-    	fir_filter(conv_signal, filtered_signal, ADC_SIZE/2, BLOCK_SIZE);
-    	iir_filter(filtered_signal, output_signal, ADC_SIZE/2);
+    	center_signal(conv_signal, ADC_SIZE/2);
+    	apply_highpass_filter(conv_signal, filtered_signal, ADC_SIZE/2);
+    	center_signal(filtered_signal, ADC_SIZE/2);
 
 
-//		iir_filter_lowpass(filtered_signal, output_signal, ADC_SIZE/2);
-//		fir_filter(filtered_signal, output_signal, ADC_SIZE/2, BLOCK_SIZE);
-
-		process_equalizer(output_signal, eq_signal, ADC_SIZE/2);
-
-		i2s_send_flag = 1; //DA KRENE DRUGU POLOVICU
-		convert_to_i2s(eq_signal, i2s_signal, ADC_SIZE);
+    	memcpy(fft_signal, filtered_signal, FFT_SIZE*sizeof(q15_t));
+		rfft(fft_signal, fftOutput, magnitudeSpectrum);
+    	last_systick = HAL_GetTick();
+		peak_values_fft(magnitudeSpectrum);
+    	offset_signal(filtered_signal, output_signal, ADC_SIZE/2);
+    	i2s_send_flag = 1; //DA KRENE DRUGU POLOVICU
+    	convert_to_i2s(output_signal, i2s_signal, ADC_SIZE);
 		if (flag_uart == 1) {
 			callUart(i2s_signal);
 		}
@@ -305,7 +223,6 @@ int main(void)
 
     }
 
-//		process_equalizer(filtered_signal, output_signal, ADC_SIZE);
 	}
 }
   /* USER CODE END 3 */
@@ -358,86 +275,43 @@ void SystemClock_Config(void)
 /* USER CODE BEGIN 4 */
 
 //ECHO EFEKT
-void echo_effect(uint16_t *buffer, uint16_t *outputBuffer, int size, float echo_strength, int delay) {
-    static uint16_t echo_buffer[ADC_SIZE * 2] = {0}; // Povećan buffer za "delay"
-    for (int i = 0; i < size; i++) {
-        int delayed_index = i - delay;
-        if (delayed_index >= 0) {
-            outputBuffer[i] = buffer + (uint16_t)(echo_strength * echo_buffer[delayed_index]);
-        }
-        echo_buffer[i] = buffer[i];
-    }
-}
-
-void echo_effect_q15(q15_t *input, q15_t *output, int size) {
-    static q15_t echo_buffer[ECHO_DELAY] = {0}; // Circular buffer for delay
-    static int echo_index = 0;
-
-    q15_t scaled_echo;
-    q15_t echo_multiplier = (q15_t)(ECHO_STRENGTH * 32767); // Convert strength to Q15 format
-
-    for (int i = 0; i < size; i++) {
-        // Scale the delayed sample by echo strength
-//        arm_scale_q15(&echo_buffer[echo_index], echo_multiplier, 0, &scaled_echo, 1);
-        arm_scale_q15(&scaled_echo, 0.8 * 32767, 0, &scaled_echo, 1);
-
-
-        // Add scaled echo to the input signal
-        output[i] = __SSAT((int32_t)(input[i] * 0.8f + scaled_echo), 16);
-
-
-        // Store the current sample in the circular buffer
-        echo_buffer[echo_index] = input[i];
-
-        // Increment and wrap the index
-        echo_index = (echo_index + 1) % ECHO_DELAY;
-    }
-}
-
-void tremolo_effect(q15_t *input, q15_t *output, int size, float freq) {
-    static float phase = 0.0f;
-    float increment = (2.0f * PI * freq) / SAMPLE_FREQ;
-
-    for (int i = 0; i < size; i++) {
-        float modulation = 0.5f * (1.0f + arm_sin_f32(phase)); // Modulation range: 0.5 to 1
-        output[i] = __SSAT((int32_t)(input[i] * modulation), 16); //ssat sprijeci clipping
-        phase += increment;
-        if (phase > 2.0f * PI) phase -= 2.0f * PI;
-    }
-}
-
-void amplify_q15_cmsis(const q15_t *input_signal, q15_t *output_signal, size_t length, float gain_percent) {
-    q15_t gain = (q15_t)(0x7FFF * gain_percent);
-	q15_t gain_array[length]; // Array of gains
-    for (size_t i = 0; i < length; i++) {
-        gain_array[i] = gain;
-    }
-    // Use CMSIS function for vectorized Q15 multiplication
-    arm_mult_q15(input_signal, gain_array, output_signal, length);
-}
+//void echo_effect(q15_t *buffer, q15_t *outputBuffer, int size, float echo_strength, int delay) {
+//    static q15_t echo_buffer[ADC_SIZE * 2] = {0}; // Povećan buffer za "delay"
+//    for (int i = 0; i < size; i++) {
+//        int delayed_index = i - delay;
+//        if (delayed_index >= 0) {
+//            outputBuffer[i] = buffer + (q15_t)(echo_strength * echo_buffer[delayed_index]);
+//        }
+//        echo_buffer[i] = buffer[i];
+//    }
+//}
 
 
 void convert_to_q15(uint16_t *rawInput, q15_t *convertedSignal, int size) {
     int i;
     if (conv_flag == 0) {
-        for (i = 0; i < size / 2; i++) {
-            // Convert and saturate to Q15
-
-            convertedSignal[i] = (q15_t)__SSAT(((rawInput[i] - 2048) * 8), 16);
-            if (convertedSignal[i] > 7800*2) convertedSignal[i] = 7800*2;
-            if (convertedSignal[i] < -7800*2) convertedSignal[i] = -7800*2;
+    	for (i = 0; i < size / 2; i++) {
+            convertedSignal[i] = (q15_t)((rawInput[i]) * master_volume);
         }
     }
     if (conv_flag == 1) {
-        for (i = size / 2; i < size; i++) {
-            // Convert and saturate to Q15
-
-            convertedSignal[i] = (q15_t)__SSAT(((rawInput[i] - 2048) * 8), 16);
-            if (convertedSignal[i] > 7000*2) convertedSignal[i] = 7000*2;
-            if (convertedSignal[i] < -7000*2) convertedSignal[i] = -7000*2;
+    	for (i = size / 2; i < size; i++) {
+            convertedSignal[i] = (q15_t)((rawInput[i]) * master_volume);
         }
     }
 }
+
+void center_signal(q15_t *input, uint16_t size) {
+    q15_t mean;
+    arm_mean_q15(input, size, &mean);
+    for (uint16_t i = 0; i < size; i++) {
+        input[i] -= mean; // Oduzimanje DC offseta
+    }
+}
+void offset_signal(q15_t *input, q15_t *output, uint16_t size, q15_t offset) {
+	arm_offset_q15(input, -offset, output, size);
+}
+
 
 
 void convert_to_i2s(q15_t *rawInput, q15_t *convertedSignal, int size) {
@@ -459,45 +333,23 @@ void convert_to_i2s(q15_t *rawInput, q15_t *convertedSignal, int size) {
     	}
 }
 
-
-
-void callUart(q15_t *input) {
-	  HAL_UART_Transmit_DMA(&huart2, (uint8_t *)input, sizeof(input));
-	  HAL_I2S_Transmit_DMA(&hi2s3, input, ADC_SIZE*2);
+void apply_highpass_filter(q15_t *input, q15_t *output, uint32_t blockSize) {
+    arm_biquad_cascade_df1_q15(&highPassFilter, input, output, blockSize);
 }
-
-void init_fir_filter() {
-	arm_float_to_q15(firCoeffs, firCoeffsQ15, NUM_TAPS);
-    memset(firStateQ15, 0, sizeof(firStateQ15));
-    arm_fir_init_q15(&S, NUM_TAPS, firCoeffsQ15, firStateQ15, BLOCK_SIZE);
-}
-
-void fir_filter(q15_t *input, q15_t *output, uint16_t length, uint16_t block_size) {
-    for (int i = 0; i < length; i += block_size) {
-        arm_fir_q15(&S, &input[i], &output[i], block_size);
-    }
-}
-
-
-void init_iir_filter() {
-	arm_float_to_q15(highPassCoeffs, highPassCoeffsQ15, 5);
-	arm_biquad_cascade_df1_init_q15(&highPassFilter, 1, highPassCoeffsQ15, highPassState, 0);
-	arm_float_to_q15(lowPassCoeffs, lowPassCoeffsQ15, 5);
-	arm_biquad_cascade_df1_init_q15(&lowPassFilter, 1, lowPassCoeffsQ15, lowPassState, 0);
-}
-
-void iir_filter(q15_t *input, q15_t *output, uint32_t blockSize) {
-	arm_biquad_cascade_df1_q15(&highPassFilter, input, output, blockSize);
-}
-void iir_filter_lowpass(q15_t *input, q15_t *output, uint32_t blockSize) {
-	arm_biquad_cascade_df1_q15(&lowPassFilter, input, output, blockSize);
+void init_highpass_filter() {
+    arm_biquad_cascade_df1_init_q15(&highPassFilter, 1, highPassCoeffsQ15, highPassState, 0);
 }
 
 
 void rfft(q15_t *inputSignal, q15_t *fftOutput, q15_t *magnitudeSpectrum) {
-    arm_rfft_q15(&rfftInstance, inputSignal, fftOutput); //rfft buffer izgleda jako cudno tho, DC, Nyquist, real1, imag1,
-    arm_cmplx_mag_q15(fftOutput, magnitudeSpectrum, FFT_SIZE / 2); //ovo je za magnitudes, mora biti /2 jer je simetrično, nyquistov dijagram iz automatskog samo poz frekv
+
+	arm_rfft_q15(&rfft_instance, inputSignal, fftOutput); //rfft buffer izgleda jako cudno tho, DC, Nyquist, real1, imag1,
+	offset = fftOutput[0];
+    arm_cmplx_mag_q15(fftOutput, magnitudeSpectrum, FFT_SIZE / 2);
+
+ //ovo je za magnitudes, mora biti /2 jer je simetrično, nyquistov dijagram iz automatskog samo poz frekv
 }
+
 void peak_values_fft(q15_t *magnitudeSpectrum) {
 	for (int i = 0; i < FFT_SIZE/2; i++) {
 		if (magnitudeSpectrum[i] > peakVal) {
@@ -509,43 +361,11 @@ void peak_values_fft(q15_t *magnitudeSpectrum) {
 
 
 
-void process_equalizer(q15_t *input, q15_t *output, uint32_t blockSize) {
-    q15_t bandOutputs[5][blockSize];   // Temporary storage for each band output
-    q15_t gainsQ15[5];
-    float32_t gains[5] = {0.2, 0.8, 1.0, 1.0, 0.4};
-
-    arm_float_to_q15(gains, gainsQ15, 5);
-
-    arm_float_to_q15(band1_coeffs, band1_coeffs_q15, 5);
-    arm_float_to_q15(band2_coeffs, band2_coeffs_q15, 5);
-    arm_float_to_q15(band3_coeffs, band3_coeffs_q15, 5);
-    arm_float_to_q15(band4_coeffs, band4_coeffs_q15, 5);
-    arm_float_to_q15(band5_coeffs, band5_coeffs_q15, 5);
-
-    arm_biquad_cascade_df1_init_q15(&eqBands[0], 1, band1_coeffs, band1_state, 0);
-    arm_biquad_cascade_df1_init_q15(&eqBands[1], 1, band2_coeffs, band2_state, 0);
-    arm_biquad_cascade_df1_init_q15(&eqBands[2], 1, band3_coeffs, band3_state, 0);
-    arm_biquad_cascade_df1_init_q15(&eqBands[3], 1, band4_coeffs, band4_state, 0);
-    arm_biquad_cascade_df1_init_q15(&eqBands[4], 1, band5_coeffs, band5_state, 0);
-
-    // Apply each band filter to the input signal
-    for (int i = 0; i < 5; i++) {
-        arm_biquad_cascade_df1_q15(&eqBands[i], input, bandOutputs[i], blockSize);
-    }
-
-    for (uint32_t n = 0; n < blockSize; n++) {
-           int32_t sum = 0;
-
-           for (int b = 0; b < 5; b++) {
-               q15_t scaledSample;
-               arm_mult_q15(&bandOutputs[b][n], &gainsQ15[b], &scaledSample, 1); // Scale band output
-               sum += scaledSample; // Sum all bands
-           }
-
-           // Saturate to Q15 range
-           output[n] = (q15_t)__SSAT(sum, 16);
-       }
+void callUart(q15_t *input) {
+	  HAL_UART_Transmit_DMA(&huart2, (uint8_t *)input, sizeof(input));
+	  HAL_I2S_Transmit_DMA(&hi2s3, input, ADC_SIZE*2);
 }
+
 void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef *hadc1) {
 	adc_half_flag = 1;
 }
