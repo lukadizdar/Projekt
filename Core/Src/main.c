@@ -46,9 +46,7 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define ADC_SIZE 1024
-#define NUM_TAPS 256 //ZA FILTER KOLIKO JE IDEALAN
 #define SAMPLE_FREQ 45455
-#define BLOCK_SIZE 64 //
 #define ECHO_DELAY 512 // Delay in samples
 #define ECHO_STRENGTH 0.7f // Echo strength (0.0 to 1.0)
 #define FFT_SIZE 512
@@ -71,12 +69,13 @@
 /* USER CODE BEGIN PV */
 
 //Signals
-uint16_t adc_signal[ADC_SIZE];
+uint16_t adc_buffer[ADC_SIZE];
 q15_t conv_signal[ADC_SIZE/2];
 q15_t output_signal[ADC_SIZE/2];
 q15_t filtered_signal[ADC_SIZE/2];
+q15_t echo_signal[ADC_SIZE/2];
 q15_t i2s_signal[ADC_SIZE*2];
-uint8_t master_volume = 4;
+uint8_t master_volume = 8;
 
 
 //FFT signals
@@ -95,14 +94,10 @@ volatile uint8_t conv_flag = 0;
 volatile uint8_t i2s_send_flag = 0;
 volatile uint8_t flag_uart = 0;
 volatile uint8_t call_uart_once = 1;
-volatile uint8_t q15_conv_flag = 0;
+
 volatile uint32_t last_systick = 0;
 
-//FFT
 arm_rfft_instance_q15 rfft_instance;
-
-
-//IIR
 q15_t highPassCoeffsQ15[5] = {16384, -16384, 0, 16364, -16359};
 arm_biquad_casd_df1_inst_q15 highPassFilter;
 q15_t highPassState[2] = {0};
@@ -131,6 +126,10 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
+	q15_t number = 394;
+	int num = 2;
+	q15_t output = number * 2;
+
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -165,7 +164,7 @@ int main(void)
   arm_rfft_init_q15(&rfft_instance, FFT_SIZE, 0, 1);
 
   HAL_TIM_Base_Start(&htim2);
-  HAL_ADC_Start_DMA(&hadc1, adc_signal, ADC_SIZE);
+  HAL_ADC_Start_DMA(&hadc1, adc_buffer, ADC_SIZE);
 
   /* USER CODE END 2 */
 
@@ -181,7 +180,7 @@ int main(void)
     	conv_flag = 0;
     	last_systick = HAL_GetTick();
 
-    	convert_to_q15(adc_signal, conv_signal, ADC_SIZE);
+    	convert_to_q15(adc_buffer, conv_signal, ADC_SIZE);
     	center_signal(conv_signal, ADC_SIZE/2);
     	apply_highpass_filter(conv_signal, filtered_signal, ADC_SIZE/2);
     	center_signal(filtered_signal, ADC_SIZE/2);
@@ -191,6 +190,8 @@ int main(void)
     	last_systick = HAL_GetTick();
 		peak_values_fft(magnitudeSpectrum);
     	offset_signal(filtered_signal, output_signal, ADC_SIZE/2);
+
+//    	amplify_by_integer(output_signal, 4, ADC_SIZE/2);
 
 
 		i2s_send_flag = 0; //DA KRENE PRVU POLOVICU
@@ -203,7 +204,7 @@ int main(void)
     	adc_done_flag = 0;
     	conv_flag = 1;
 
-    	convert_to_q15(adc_signal, conv_signal, ADC_SIZE);
+    	convert_to_q15(adc_buffer, conv_signal, ADC_SIZE);
     	center_signal(conv_signal, ADC_SIZE/2);
     	apply_highpass_filter(conv_signal, filtered_signal, ADC_SIZE/2);
     	center_signal(filtered_signal, ADC_SIZE/2);
@@ -214,6 +215,8 @@ int main(void)
     	last_systick = HAL_GetTick();
 		peak_values_fft(magnitudeSpectrum);
     	offset_signal(filtered_signal, output_signal, ADC_SIZE/2);
+
+//    	amplify_by_integer(output_signal, 4, ADC_SIZE/2);
     	i2s_send_flag = 1; //DA KRENE DRUGU POLOVICU
     	convert_to_i2s(output_signal, i2s_signal, ADC_SIZE);
 		if (flag_uart == 1) {
@@ -275,16 +278,17 @@ void SystemClock_Config(void)
 /* USER CODE BEGIN 4 */
 
 //ECHO EFEKT
-//void echo_effect(q15_t *buffer, q15_t *outputBuffer, int size, float echo_strength, int delay) {
-//    static q15_t echo_buffer[ADC_SIZE * 2] = {0}; // Povećan buffer za "delay"
-//    for (int i = 0; i < size; i++) {
-//        int delayed_index = i - delay;
-//        if (delayed_index >= 0) {
-//            outputBuffer[i] = buffer + (q15_t)(echo_strength * echo_buffer[delayed_index]);
-//        }
-//        echo_buffer[i] = buffer[i];
-//    }
-//}
+void echo_effect(q15_t *buffer, q15_t *outputBuffer, int size, float echo_strength, int delay) {
+    static q15_t echo_buffer[ADC_SIZE * 2] = {0}; // Povećan buffer za "delay"
+    for (int i = 0; i < size; i++) {
+        int delayed_index = i - delay;
+        if (delayed_index >= 0) {
+            outputBuffer[i] = buffer + (q15_t)(echo_strength * echo_buffer[delayed_index]);
+        }
+        echo_buffer[i] = buffer[i];
+    }
+}
+
 
 
 void convert_to_q15(uint16_t *rawInput, q15_t *convertedSignal, int size) {
@@ -300,7 +304,6 @@ void convert_to_q15(uint16_t *rawInput, q15_t *convertedSignal, int size) {
         }
     }
 }
-
 void center_signal(q15_t *input, uint16_t size) {
     q15_t mean;
     arm_mean_q15(input, size, &mean);
@@ -311,9 +314,6 @@ void center_signal(q15_t *input, uint16_t size) {
 void offset_signal(q15_t *input, q15_t *output, uint16_t size, q15_t offset) {
 	arm_offset_q15(input, -offset, output, size);
 }
-
-
-
 void convert_to_i2s(q15_t *rawInput, q15_t *convertedSignal, int size) {
     int i = 0;
     	if (i2s_send_flag == 0) {
@@ -332,15 +332,12 @@ void convert_to_i2s(q15_t *rawInput, q15_t *convertedSignal, int size) {
         	}
     	}
 }
-
 void apply_highpass_filter(q15_t *input, q15_t *output, uint32_t blockSize) {
     arm_biquad_cascade_df1_q15(&highPassFilter, input, output, blockSize);
 }
 void init_highpass_filter() {
     arm_biquad_cascade_df1_init_q15(&highPassFilter, 1, highPassCoeffsQ15, highPassState, 0);
 }
-
-
 void rfft(q15_t *inputSignal, q15_t *fftOutput, q15_t *magnitudeSpectrum) {
 
 	arm_rfft_q15(&rfft_instance, inputSignal, fftOutput); //rfft buffer izgleda jako cudno tho, DC, Nyquist, real1, imag1,
@@ -349,7 +346,6 @@ void rfft(q15_t *inputSignal, q15_t *fftOutput, q15_t *magnitudeSpectrum) {
 
  //ovo je za magnitudes, mora biti /2 jer je simetrično, nyquistov dijagram iz automatskog samo poz frekv
 }
-
 void peak_values_fft(q15_t *magnitudeSpectrum) {
 	for (int i = 0; i < FFT_SIZE/2; i++) {
 		if (magnitudeSpectrum[i] > peakVal) {
