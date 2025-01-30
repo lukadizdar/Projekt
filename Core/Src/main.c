@@ -36,6 +36,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -50,7 +51,7 @@
 #define ECHO_DELAY 512 // Delay in samples
 #define ECHO_STRENGTH 0.7f // Echo strength (0.0 to 1.0)
 #define FFT_SIZE 512
-
+#define ECHO_BUFFER_SIZE 4096 // Adjust as needed for delay length
 
 /* USER CODE END PD */
 
@@ -76,6 +77,7 @@ q15_t filtered_signal[ADC_SIZE/2];
 q15_t echo_signal[ADC_SIZE/2];
 q15_t i2s_signal[ADC_SIZE*2];
 uint8_t master_volume = 8;
+q15_t distortion(q15_t sample, int bitDepth);
 
 
 //FFT signals
@@ -94,13 +96,15 @@ volatile uint8_t conv_flag = 0;
 volatile uint8_t i2s_send_flag = 0;
 volatile uint8_t flag_uart = 0;
 volatile uint8_t call_uart_once = 1;
-
-volatile uint32_t last_systick = 0;
+volatile uint8_t distortion_flag = 0;
+volatile uint8_t distortion_strength = 6;
 
 arm_rfft_instance_q15 rfft_instance;
 q15_t highPassCoeffsQ15[5] = {16384, -16384, 0, 16364, -16359};
 arm_biquad_casd_df1_inst_q15 highPassFilter;
 q15_t highPassState[2] = {0};
+
+
 
 
 /* USER CODE END PV */
@@ -126,9 +130,12 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
+
 	q15_t number = 394;
 	int num = 2;
 	q15_t output = number * 2;
+
+	float da = 0.5f;
 
   /* USER CODE END 1 */
 
@@ -153,14 +160,12 @@ int main(void)
   MX_I2C1_Init();
   MX_I2S3_Init();
   MX_SPI1_Init();
-//  MX_USB_HOST_Init();
+  MX_USB_HOST_Init();
   MX_TIM2_Init();
   MX_ADC1_Init();
   MX_USART2_UART_Init();
-
   /* USER CODE BEGIN 2 */
   configAudio();
-  init_highpass_filter();
   arm_rfft_init_q15(&rfft_instance, FFT_SIZE, 0, 1);
 
   HAL_TIM_Base_Start(&htim2);
@@ -173,13 +178,13 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
+    MX_USB_HOST_Process();
 
     /* USER CODE BEGIN 3 */
 	  if (adc_half_flag == 1) {
     	adc_half_flag = 0;
     	conv_flag = 0;
-    	last_systick = HAL_GetTick();
-
+    	init_highpass_filter();
     	convert_to_q15(adc_buffer, conv_signal, ADC_SIZE);
     	center_signal(conv_signal, ADC_SIZE/2);
     	apply_highpass_filter(conv_signal, filtered_signal, ADC_SIZE/2);
@@ -187,11 +192,16 @@ int main(void)
 
     	memcpy(fft_signal, filtered_signal, FFT_SIZE*sizeof(q15_t));
 		rfft(fft_signal, fftOutput, magnitudeSpectrum);
-    	last_systick = HAL_GetTick();
 		peak_values_fft(magnitudeSpectrum);
     	offset_signal(filtered_signal, output_signal, ADC_SIZE/2);
 
-//    	amplify_by_integer(output_signal, 4, ADC_SIZE/2);
+    	if (distortion_flag == 1) {
+        	for (int i = 0; i < ADC_SIZE/2; i++) {
+        		output_signal[i] = distortion(output_signal[i], distortion_strength);
+        	}
+    	}
+
+
 
 
 		i2s_send_flag = 0; //DA KRENE PRVU POLOVICU
@@ -203,7 +213,7 @@ int main(void)
     if (adc_done_flag == 1) {
     	adc_done_flag = 0;
     	conv_flag = 1;
-
+    	init_highpass_filter();
     	convert_to_q15(adc_buffer, conv_signal, ADC_SIZE);
     	center_signal(conv_signal, ADC_SIZE/2);
     	apply_highpass_filter(conv_signal, filtered_signal, ADC_SIZE/2);
@@ -212,11 +222,17 @@ int main(void)
 
     	memcpy(fft_signal, filtered_signal, FFT_SIZE*sizeof(q15_t));
 		rfft(fft_signal, fftOutput, magnitudeSpectrum);
-    	last_systick = HAL_GetTick();
 		peak_values_fft(magnitudeSpectrum);
     	offset_signal(filtered_signal, output_signal, ADC_SIZE/2);
 
-//    	amplify_by_integer(output_signal, 4, ADC_SIZE/2);
+    	if (distortion_flag == 1) {
+        	for (int i = 0; i < ADC_SIZE/2; i++) {
+        		output_signal[i] = distortion(output_signal[i], distortion_strength);
+        	}
+    	}
+
+
+
     	i2s_send_flag = 1; //DA KRENE DRUGU POLOVICU
     	convert_to_i2s(output_signal, i2s_signal, ADC_SIZE);
 		if (flag_uart == 1) {
@@ -277,30 +293,23 @@ void SystemClock_Config(void)
 
 /* USER CODE BEGIN 4 */
 
-//ECHO EFEKT
-void echo_effect(q15_t *buffer, q15_t *outputBuffer, int size, float echo_strength, int delay) {
-    static q15_t echo_buffer[ADC_SIZE * 2] = {0}; // Povećan buffer za "delay"
-    for (int i = 0; i < size; i++) {
-        int delayed_index = i - delay;
-        if (delayed_index >= 0) {
-            outputBuffer[i] = buffer + (q15_t)(echo_strength * echo_buffer[delayed_index]);
-        }
-        echo_buffer[i] = buffer[i];
-    }
+
+// Function to apply distortion effect (e.g., hard clipping)
+q15_t distortion(q15_t sample, int bitDepth) {
+    int shift = 15 - bitDepth;
+    return (sample >> shift) << shift;
 }
-
-
 
 void convert_to_q15(uint16_t *rawInput, q15_t *convertedSignal, int size) {
     int i;
     if (conv_flag == 0) {
     	for (i = 0; i < size / 2; i++) {
-            convertedSignal[i] = (q15_t)((rawInput[i]) * master_volume);
+    		convertedSignal[i] = (q15_t)((rawInput[i]) * master_volume);
         }
     }
     if (conv_flag == 1) {
     	for (i = size / 2; i < size; i++) {
-            convertedSignal[i] = (q15_t)((rawInput[i]) * master_volume);
+    		convertedSignal[i] = (q15_t)((rawInput[i]) * master_volume);
         }
     }
 }
@@ -342,7 +351,11 @@ void rfft(q15_t *inputSignal, q15_t *fftOutput, q15_t *magnitudeSpectrum) {
 
 	arm_rfft_q15(&rfft_instance, inputSignal, fftOutput); //rfft buffer izgleda jako cudno tho, DC, Nyquist, real1, imag1,
 	offset = fftOutput[0];
-    arm_cmplx_mag_q15(fftOutput, magnitudeSpectrum, FFT_SIZE / 2);
+	float result;
+	for (int i = 0; i < 256; i++) {
+		result = (float)(fftOutput[i+2]*fftOutput[i+2] + fftOutput[i+3]*fftOutput[i+3]);
+		magnitudeSpectrum[i] = (q15_t)sqrt(result);
+	}
 
  //ovo je za magnitudes, mora biti /2 jer je simetrično, nyquistov dijagram iz automatskog samo poz frekv
 }
@@ -380,6 +393,7 @@ void HAL_I2S_TxCpltCallback(I2S_HandleTypeDef *hi2s) {
     if (hi2s->Instance == SPI3) {
     }
 }
+
 
 
 
